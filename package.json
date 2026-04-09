@@ -12,9 +12,9 @@
     "@opencode-ai/plugin": ">=1.4.0"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "^1.4.1",
-    "@opencode-ai/sdk": "^1.4.1",
-    "typescript": "^5.8.0",
+    "@opencode-ai/plugin": "^1.4.2",
+    "@opencode-ai/sdk": "^1.4.2",
+    "typescript": "^5.9.3",
     "@types/bun": "latest"
   }
 }

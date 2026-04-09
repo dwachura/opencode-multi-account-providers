@@ -210,11 +210,13 @@ describe("oauth rotation on rate limit", () => {
 
     writeMultiAuth([
       {
+        userId: "acct_alice",
         label: PROVIDER_ID, type: "oauth",
         access: "oa-alice", refresh: "or-alice",
         expires, accountId: "acct_alice",
       },
       {
+        userId: "acct_bob",
         label: PROVIDER_ID, type: "oauth",
         access: "oa-bob", refresh: "or-bob",
         expires, accountId: "acct_bob",
@@ -258,8 +260,8 @@ describe("session reset", () => {
 
     writeMultiAuth(
       [
-        { label: PROVIDER_ID, type: "oauth", access: "oa-reset-a", refresh: "or-reset-a", expires, accountId: "acct_a" },
-        { label: PROVIDER_ID, type: "oauth", access: "oa-reset-b", refresh: "or-reset-b", expires, accountId: "acct_b" },
+        { userId: "acct_a", label: PROVIDER_ID, type: "oauth", access: "oa-reset-a", refresh: "or-reset-a", expires, accountId: "acct_a" },
+        { userId: "acct_b", label: PROVIDER_ID, type: "oauth", access: "oa-reset-b", refresh: "or-reset-b", expires, accountId: "acct_b" },
       ],
       0,
       [0, 1],
@@ -281,7 +283,7 @@ describe("single account passthrough", () => {
     await setServerTokens("user-a", "oa-single", "or-single", expires)
 
     writeMultiAuth([
-      { label: PROVIDER_ID, type: "oauth", access: "oa-single", refresh: "or-single", expires, accountId: "acct_a" },
+      { userId: "acct_a", label: PROVIDER_ID, type: "oauth", access: "oa-single", refresh: "or-single", expires, accountId: "acct_a" },
     ])
 
     writeOAuthAuth("oa-single", "or-single", expires, "acct_a")

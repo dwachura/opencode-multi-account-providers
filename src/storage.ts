@@ -6,6 +6,7 @@ import { homedir } from "node:os"
 // ── Types ──
 
 export type OAuthAccount = {
+  userId?: string
   label: string
   type: "oauth"
   access: string
@@ -96,9 +97,9 @@ function readAuthJsonAll(): Record<string, unknown> {
 export function fingerprint(account: Account): string {
   let input: string
   if (account.type === "oauth") {
-    // Prefer accountId (stable across token refreshes). Fall back to refresh
-    // token only when accountId is unavailable.
-    input = account.accountId ? `oauth:accountId:${account.accountId}` : `oauth:refresh:${account.refresh}`
+    if (account.userId) input = `oauth:userId:${account.userId}`
+    else if (account.accountId) input = `oauth:accountId:${account.accountId}`
+    else input = `oauth:refresh:${account.refresh}`
   } else {
     input = `api:${account.key}`
   }

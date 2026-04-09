@@ -48,18 +48,31 @@ const apiAccount: storage.ApiAccount = {
 // ── fingerprint ──
 
 describe("fingerprint", () => {
-  test("oauth uses accountId when available", () => {
-    const fp1 = storage.fingerprint(oauthA)
-    // Same accountId, different refresh token → same fingerprint
+  test("oauth uses userId when available", () => {
+    const withUserId: storage.OAuthAccount = { ...oauthA, userId: "user_123" }
+    const fp1 = storage.fingerprint(withUserId)
+    // Same userId, different refresh/access/accountId → same fingerprint
+    const refreshed = { ...withUserId, refresh: "new-refresh", access: "new-access", accountId: "different" }
+    expect(storage.fingerprint(refreshed)).toBe(fp1)
+  })
+
+  test("oauth falls back to accountId when no userId", () => {
+    const fp1 = storage.fingerprint(oauthA) // has accountId, no userId
     const refreshed = { ...oauthA, refresh: "new-refresh-token", access: "new-access" }
     expect(storage.fingerprint(refreshed)).toBe(fp1)
   })
 
-  test("oauth falls back to refresh when no accountId", () => {
-    const noId: storage.OAuthAccount = { ...oauthA, accountId: undefined }
+  test("oauth falls back to refresh when no userId or accountId", () => {
+    const noId: storage.OAuthAccount = { ...oauthA, userId: undefined, accountId: undefined }
     const fp1 = storage.fingerprint(noId)
     const differentRefresh: storage.OAuthAccount = { ...noId, refresh: "other-refresh" }
     expect(storage.fingerprint(differentRefresh)).not.toBe(fp1)
+  })
+
+  test("different userIds produce different fingerprints", () => {
+    const a: storage.OAuthAccount = { ...oauthA, userId: "user_1" }
+    const b: storage.OAuthAccount = { ...oauthB, userId: "user_2" }
+    expect(storage.fingerprint(a)).not.toBe(storage.fingerprint(b))
   })
 
   test("different accountIds produce different fingerprints", () => {

@@ -5,10 +5,10 @@
     "": {
       "name": "opencode-multi-account-providers",
       "devDependencies": {
-        "@opencode-ai/plugin": "^1.4.1",
-        "@opencode-ai/sdk": "^1.4.1",
+        "@opencode-ai/plugin": "^1.4.2",
+        "@opencode-ai/sdk": "^1.4.2",
         "@types/bun": "latest",
-        "typescript": "^5.8.0",
+        "typescript": "^5.9.3",
       },
       "peerDependencies": {
         "@opencode-ai/plugin": ">=1.4.0",

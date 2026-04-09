@@ -35,7 +35,21 @@ async function createHooks(providers?: string[]) {
   return plugin.server!({ client: mockClient } as any, opts)
 }
 
+function makeOpenAiJwt(claims: { userId?: string; email?: string }): string {
+  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url")
+  const payload: Record<string, unknown> = { iat: 1234567890 }
+  if (claims.userId) {
+    payload["https://api.openai.com/auth"] = { chatgpt_account_user_id: claims.userId }
+  }
+  if (claims.email) {
+    payload["https://api.openai.com/profile"] = { email: claims.email }
+  }
+  const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url")
+  return `${header}.${payloadB64}.fake-signature`
+}
+
 const oauthA: storage.OAuthAccount = {
+  userId: "acct_a",
   label: "openai",
   type: "oauth",
   access: "access-a",
@@ -45,6 +59,7 @@ const oauthA: storage.OAuthAccount = {
 }
 
 const oauthB: storage.OAuthAccount = {
+  userId: "acct_b",
   label: "openai",
   type: "oauth",
   access: "access-b",
@@ -101,6 +116,52 @@ describe("chat.params — auto-detection", () => {
     expect(data).toBeDefined()
     expect(data!.accounts).toHaveLength(1)
     expect(data!.accounts[0].type).toBe("oauth")
+  })
+
+  test("extracts userId and email from ChatGPT JWT", async () => {
+    const jwt = makeOpenAiJwt({ userId: "user_abc", email: "alice@example.com" })
+    writeFileSync(
+      join(testDir, "auth.json"),
+      JSON.stringify({
+        openai: {
+          type: "oauth",
+          refresh: "r1",
+          access: jwt,
+          expires: 9999999999999,
+        },
+      }),
+    )
+
+    const hooks = await createHooks(["openai"])
+    await hooks["chat.params"]!(chatParamsInput("s1", "openai"))
+
+    const data = storage.read("openai")
+    const account = data!.accounts[0] as storage.OAuthAccount
+    expect(account.userId).toBe("user_abc")
+    expect(account.label).toBe("alice@example.com")
+  })
+
+  test("falls back to accountId when JWT has no ChatGPT claims", async () => {
+    writeFileSync(
+      join(testDir, "auth.json"),
+      JSON.stringify({
+        openai: {
+          type: "oauth",
+          refresh: "r1",
+          access: "not-a-jwt",
+          expires: 9999999999999,
+          accountId: "acct_fallback",
+        },
+      }),
+    )
+
+    const hooks = await createHooks(["openai"])
+    await hooks["chat.params"]!(chatParamsInput("s1", "openai"))
+
+    const data = storage.read("openai")
+    const account = data!.accounts[0] as storage.OAuthAccount
+    expect(account.userId).toBe("acct_fallback")
+    expect(account.label).toBe("openai")
   })
 
   test("ignores api key accounts from auth.json", async () => {

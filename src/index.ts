@@ -14,12 +14,36 @@ function isRateLimitMessage(msg: string): boolean {
   )
 }
 
+function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
+  try {
+    const parts = token.split(".")
+    if (parts.length !== 3) return undefined
+    const payload = Buffer.from(parts[1], "base64url").toString("utf-8")
+    return JSON.parse(payload)
+  } catch {
+    return undefined
+  }
+}
+
+function extractChatGptClaims(accessToken: string): { userId?: string; email?: string } {
+  const claims = decodeJwtPayload(accessToken)
+  if (!claims) return {}
+  const authClaim = claims["https://api.openai.com/auth"] as Record<string, unknown> | undefined
+  const profileClaim = claims["https://api.openai.com/profile"] as Record<string, unknown> | undefined
+  return {
+    userId: typeof authClaim?.chatgpt_account_user_id === "string" ? authClaim.chatgpt_account_user_id : undefined,
+    email: typeof profileClaim?.email === "string" ? profileClaim.email : undefined,
+  }
+}
+
 function toOAuthAccount(
   providerID: string,
   entry: storage.OAuthAuthEntry,
 ): storage.OAuthAccount {
+  const { userId, email } = extractChatGptClaims(entry.access)
   return {
-    label: providerID,
+    userId: userId ?? entry.accountId,
+    label: email ?? providerID,
     type: "oauth",
     access: entry.access,
     refresh: entry.refresh,
