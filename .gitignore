@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.test-env/
+
+*.tsbuildinfo
+*.log
+*.swp
+*.swo
+*~
+.DS_Store

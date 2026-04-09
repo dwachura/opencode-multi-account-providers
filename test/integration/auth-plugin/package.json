@@ -1,0 +1,15 @@
+{
+  "name": "fake-auth-plugin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./server": "./index.ts"
+  },
+  "engines": {
+    "opencode": ">=1.3.0"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.4.0"
+  }
+}
