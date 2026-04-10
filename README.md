@@ -270,7 +270,55 @@ Interactive `e2e:tui` starts the fake server with `FAKE_SERVER_SEED=0`, so users
 ### Other ideas
 
 - optional TUI confirm-before-switch flow for rate-limited accounts, configurable per plugin instance via `rotationMode: "auto" | "confirm"`
-- account usage tracking, likely combining local request/token counting with provider-side checks; for OpenAI this can include `GET https://api.openai.com/v1/usage`
+- account usage tracking, likely combining local request/token counting with provider-side checks; for OpenAI OAuth accounts this likely means `GET https://chatgpt.com/backend-api/wham/usage` with `Authorization: <token>` and tracking fields such as `user_id`, `account_id`, `email`, `plan_type`, `rate_limit.allowed`, `rate_limit.limit_reached`, the primary and secondary window reset/usage fields, and credits/spend-control status
+
+OpenAI usage endpoint reference for later planning:
+
+```bash
+curl --location 'https://chatgpt.com/backend-api/wham/usage' \
+  --header 'Authorization: <token>'
+```
+
+Example response:
+
+```json
+{
+  "user_id": "<user id>",
+  "account_id": "<account id>",
+  "email": "<user email>",
+  "plan_type": "team",
+  "rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {
+      "used_percent": 19,
+      "limit_window_seconds": 18000,
+      "reset_after_seconds": 10721,
+      "reset_at": 1775869147
+    },
+    "secondary_window": {
+      "used_percent": 19,
+      "limit_window_seconds": 604800,
+      "reset_after_seconds": 519936,
+      "reset_at": 1776378362
+    }
+  },
+  "code_review_rate_limit": null,
+  "additional_rate_limits": null,
+  "credits": {
+    "has_credits": false,
+    "unlimited": false,
+    "overage_limit_reached": false,
+    "balance": null,
+    "approx_local_messages": null,
+    "approx_cloud_messages": null
+  },
+  "spend_control": {
+    "reached": false
+  },
+  "promo": null
+}
+```
 
 ### Integration test infrastructure
 
