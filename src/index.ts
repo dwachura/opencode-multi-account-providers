@@ -72,7 +72,6 @@ function createAuthJsonWatcher(input: {
   let debounceTimer: ReturnType<typeof setTimeout> | undefined
   let retryTimer: ReturnType<typeof setTimeout> | undefined
   let retryLogged = false
-  let needsInitialScan = false
   let stopped = false
 
   const clearRetry = () => {
@@ -95,11 +94,15 @@ function createAuthJsonWatcher(input: {
     watcher = undefined
   }
 
+  const scheduleScan = (delayMs: number) => {
+    clearDebounce()
+    debounceTimer = setTimeout(input.onChange, delayMs)
+  }
+
   const scheduleRetry = (reason: "missing-dir" | "watch-error") => {
     if (stopped || retryTimer || watcher) return
     if (!retryLogged) {
       retryLogged = true
-      needsInitialScan = true
       input.log(
         reason === "missing-dir" ? "info" : "warn",
         "auth.json watcher deferred; retrying",
@@ -125,15 +128,12 @@ function createAuthJsonWatcher(input: {
       watcher = watch(dir, { persistent: false }, (eventType, changedFile) => {
         if (changedFile !== filename) return
         if (eventType !== "change" && eventType !== "rename") return
-        clearDebounce()
-        debounceTimer = setTimeout(input.onChange, 50)
+        scheduleScan(50)
       })
       retryLogged = false
       input.log("debug", "auth.json watcher started", { dir, filename })
-      if (needsInitialScan && existsSync(input.authJsonPath)) {
-        clearDebounce()
-        debounceTimer = setTimeout(input.onChange, 0)
-        needsInitialScan = false
+      if (existsSync(input.authJsonPath)) {
+        scheduleScan(0)
       }
       watcher.on("error", () => {
         closeWatcher()

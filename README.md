@@ -252,7 +252,23 @@ Interactive `e2e:tui` starts the fake server with `FAKE_SERVER_SEED=0`, so users
 
 ## Future Work
 
-- provider account management directly from the opencode TUI
+### Planned: TUI account management
+
+- manage stored accounts for the configured provider directly from the opencode TUI
+- initial scope: list accounts, show `active` / `exhausted`, manually switch the active account, reset exhausted state, and remove stored accounts
+- guided `Add account` flow should stay inside the app via a modal or drawer and reuse the normal `opencode auth login <provider>` flow rather than implementing OAuth in this plugin
+- the add/login UI should watch for `auth.json` capture completion, then offer `Set active now` or `Keep current active`
+- manual account-management actions should preserve the current rotation model and apply safely on the next request
+
+### Planned: account metadata
+
+- add `created_at` to persisted account rows so we know when an account record was first captured
+- add `updated_at` to persisted account rows so we know when credentials or account metadata were last refreshed
+- preserve `created_at` on duplicate-account refresh and bump `updated_at` whenever an existing stored account is rewritten
+- expose these timestamps in future account-management views for debugging and stale-account inspection
+
+### Other ideas
+
 - optional TUI confirm-before-switch flow for rate-limited accounts, configurable per plugin instance via `rotationMode: "auto" | "confirm"`
 - account usage tracking, likely combining local request/token counting with provider-side checks; for OpenAI this can include `GET https://api.openai.com/v1/usage`
 

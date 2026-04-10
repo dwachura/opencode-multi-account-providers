@@ -167,6 +167,15 @@ async function sendPrompt(sessionID: string, text: string) {
   })
 }
 
+async function waitFor(check: () => boolean, timeoutMs = 5_000) {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (check()) return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error("Timed out waiting for condition")
+}
+
 // ── Tests ──
 
 describe("environment", () => {
@@ -289,6 +298,23 @@ describe("single account passthrough", () => {
 })
 
 describe("auth.json file watcher", () => {
+  test("captures an existing auth.json entry before the first prompt", async () => {
+    storage.write(PROVIDER_ID, { active: 0, accounts: [], exhausted: [] })
+
+    const expires = Date.now() + 3600_000
+    await setServerTokens("user-c", "startup-token", "startup-refresh", expires)
+
+    writeOAuthAuth("startup-token", "startup-refresh", expires, "acct_startup")
+
+    await waitFor(() => readMultiAuth()?.accounts.length === 1)
+
+    const data = readMultiAuth()!
+    expect(data.accounts).toHaveLength(1)
+    const account = data.accounts[0] as storage.OAuthAccount
+    expect(account.access).toBe("startup-token")
+    expect(account.id).toBe("startup-token")
+  })
+
   test("captures a new account when auth.json is rewritten", async () => {
     // Start with no accounts in storage
     storage.write(PROVIDER_ID, { active: 0, accounts: [], exhausted: [] })

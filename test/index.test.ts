@@ -274,6 +274,34 @@ describe("chat.params — auto-detection", () => {
 })
 
 describe("auth.json watcher", () => {
+  test("captures existing auth.json immediately on startup", async () => {
+    const jwt = makeOpenAiJwt({ chatgptId: "user_startup", openaiEmail: "startup@example.com" })
+    writeFileSync(
+      join(testDir, "auth.json"),
+      JSON.stringify({
+        openai: {
+          type: "oauth",
+          refresh: "r-startup",
+          access: jwt,
+          expires: 9999999999999,
+        },
+      }),
+    )
+
+    await createHooks("openai")
+
+    await waitFor(() => storage.read("openai")?.accounts.length === 1)
+
+    const account = storage.read("openai")!.accounts[0] as storage.OAuthAccount
+    expect(account.id).toBe("user_startup")
+    expect(account.label).toBe("startup@example.com")
+    expect(toastCalls).toContainEqual({
+      variant: "success",
+      message: "Captured new account for openai: startup@example.com",
+      title: "opencode-multi-account-providers",
+    })
+  })
+
   test("multiple plugin instances can watch the same auth.json", async () => {
     await createHooks("openai")
     await createHooks("fake")
