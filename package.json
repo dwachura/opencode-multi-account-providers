@@ -2,6 +2,15 @@
   "name": "opencode-multi-account-providers",
   "version": "0.1.0",
   "type": "module",
+  "scripts": {
+    "e2e": "bun script/e2e.ts",
+    "e2e:tui": "bun script/e2e.ts tui",
+    "e2e:account:list": "bun script/e2e.ts account:list",
+    "e2e:account:add": "bun script/e2e.ts account:add",
+    "e2e:account:remove": "bun script/e2e.ts account:remove",
+    "e2e:limit": "bun script/e2e.ts limit",
+    "e2e:reset": "bun script/e2e.ts reset"
+  },
   "exports": {
     "./server": "./src/index.ts"
   },

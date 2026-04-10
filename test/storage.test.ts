@@ -22,6 +22,7 @@ afterAll(() => {
 // ── Helpers ──
 
 const oauthA: storage.OAuthAccount = {
+  id: "user_a",
   label: "personal",
   type: "oauth",
   access: "access-a",
@@ -31,6 +32,7 @@ const oauthA: storage.OAuthAccount = {
 }
 
 const oauthB: storage.OAuthAccount = {
+  id: "user_b",
   label: "work",
   type: "oauth",
   access: "access-b",
@@ -39,54 +41,22 @@ const oauthB: storage.OAuthAccount = {
   accountId: "acct_b",
 }
 
-const apiAccount: storage.ApiAccount = {
-  label: "api-key-1",
-  type: "api",
-  key: "sk-test-key-1",
-}
-
 // ── fingerprint ──
 
 describe("fingerprint", () => {
-  test("oauth uses userId when available", () => {
-    const withUserId: storage.OAuthAccount = { ...oauthA, userId: "user_123" }
-    const fp1 = storage.fingerprint(withUserId)
-    // Same userId, different refresh/access/accountId → same fingerprint
-    const refreshed = { ...withUserId, refresh: "new-refresh", access: "new-access", accountId: "different" }
+  test("identical id yields identical fingerprint regardless of other fields", () => {
+    const fp1 = storage.fingerprint(oauthA)
+    const refreshed: storage.OAuthAccount = {
+      ...oauthA,
+      refresh: "new-refresh",
+      access: "new-access",
+      accountId: "different",
+    }
     expect(storage.fingerprint(refreshed)).toBe(fp1)
   })
 
-  test("oauth falls back to accountId when no userId", () => {
-    const fp1 = storage.fingerprint(oauthA) // has accountId, no userId
-    const refreshed = { ...oauthA, refresh: "new-refresh-token", access: "new-access" }
-    expect(storage.fingerprint(refreshed)).toBe(fp1)
-  })
-
-  test("oauth falls back to refresh when no userId or accountId", () => {
-    const noId: storage.OAuthAccount = { ...oauthA, userId: undefined, accountId: undefined }
-    const fp1 = storage.fingerprint(noId)
-    const differentRefresh: storage.OAuthAccount = { ...noId, refresh: "other-refresh" }
-    expect(storage.fingerprint(differentRefresh)).not.toBe(fp1)
-  })
-
-  test("different userIds produce different fingerprints", () => {
-    const a: storage.OAuthAccount = { ...oauthA, userId: "user_1" }
-    const b: storage.OAuthAccount = { ...oauthB, userId: "user_2" }
-    expect(storage.fingerprint(a)).not.toBe(storage.fingerprint(b))
-  })
-
-  test("different accountIds produce different fingerprints", () => {
+  test("different ids produce different fingerprints", () => {
     expect(storage.fingerprint(oauthA)).not.toBe(storage.fingerprint(oauthB))
-  })
-
-  test("api uses key", () => {
-    const fp1 = storage.fingerprint(apiAccount)
-    const different: storage.ApiAccount = { ...apiAccount, key: "sk-other" }
-    expect(storage.fingerprint(different)).not.toBe(fp1)
-  })
-
-  test("oauth and api never collide", () => {
-    expect(storage.fingerprint(oauthA)).not.toBe(storage.fingerprint(apiAccount))
   })
 })
 
@@ -146,13 +116,6 @@ describe("add", () => {
     expect((data.accounts[0] as storage.OAuthAccount).access).toBe("new-access")
   })
 
-  test("api accounts deduplicate by key", () => {
-    storage.add("openai", apiAccount)
-    const updated: storage.ApiAccount = { ...apiAccount, label: "renamed" }
-    const idx = storage.add("openai", updated)
-    expect(idx).toBe(0)
-    expect(storage.read("openai")!.accounts).toHaveLength(1)
-  })
 })
 
 // ── activate ──
@@ -228,7 +191,7 @@ describe("next", () => {
   })
 
   test("skips exhausted accounts", () => {
-    const c: storage.OAuthAccount = { ...oauthA, label: "c", accountId: "acct_c" }
+    const c: storage.OAuthAccount = { ...oauthA, id: "user_c", label: "c", accountId: "acct_c" }
     storage.add("openai", oauthA) // 0
     storage.add("openai", oauthB) // 1
     storage.add("openai", c) // 2
@@ -238,7 +201,7 @@ describe("next", () => {
   })
 
   test("wraps around", () => {
-    const c: storage.OAuthAccount = { ...oauthA, label: "c", accountId: "acct_c" }
+    const c: storage.OAuthAccount = { ...oauthA, id: "user_c", label: "c", accountId: "acct_c" }
     storage.add("openai", oauthA) // 0
     storage.add("openai", oauthB) // 1
     storage.add("openai", c) // 2
@@ -268,15 +231,17 @@ describe("readAuthJson", () => {
     expect(entry).toEqual({ type: "oauth", refresh: "r", access: "a", expires: 9999999999999 })
   })
 
-  test("reads api entry from auth.json", () => {
+  test("returns undefined for api entry", () => {
     writeFileSync(join(testDir, "auth.json"), JSON.stringify({
       anthropic: { type: "api", key: "sk-ant-123" },
     }))
-    expect(storage.readAuthJson("anthropic")).toEqual({ type: "api", key: "sk-ant-123" })
+    expect(storage.readAuthJson("anthropic")).toBeUndefined()
   })
 
   test("returns undefined for missing provider", () => {
-    writeFileSync(join(testDir, "auth.json"), JSON.stringify({ openai: { type: "api", key: "k" } }))
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      openai: { type: "oauth", refresh: "r", access: "a", expires: 1 },
+    }))
     expect(storage.readAuthJson("anthropic")).toBeUndefined()
   })
 
@@ -293,11 +258,9 @@ describe("readAuthJson", () => {
 
   test("mtime cache avoids re-read", () => {
     writeFileSync(join(testDir, "auth.json"), JSON.stringify({
-      openai: { type: "api", key: "k1" },
+      openai: { type: "oauth", refresh: "r", access: "a", expires: 1 },
     }))
     const first = storage.readAuthJson("openai")
-    // Overwrite file content WITHOUT changing mtime (write same bytes)
-    // Since we can't control mtime precisely, just verify cache is populated
     const second = storage.readAuthJson("openai")
     expect(first).toEqual(second)
   })

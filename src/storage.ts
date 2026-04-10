@@ -1,12 +1,13 @@
+import { Database } from "bun:sqlite"
 import { createHash } from "node:crypto"
-import { readFileSync, writeFileSync, statSync, mkdirSync } from "node:fs"
+import { readFileSync, statSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 
 // ── Types ──
 
 export type OAuthAccount = {
-  userId?: string
+  id: string
   label: string
   type: "oauth"
   access: string
@@ -16,14 +17,7 @@ export type OAuthAccount = {
   enterpriseUrl?: string
 }
 
-export type ApiAccount = {
-  label: string
-  type: "api"
-  key: string
-  metadata?: Record<string, string>
-}
-
-export type Account = OAuthAccount | ApiAccount
+export type Account = OAuthAccount
 
 export type ProviderData = {
   active: number
@@ -31,13 +25,14 @@ export type ProviderData = {
   exhausted: number[]
 }
 
-type MultiAuthStore = Record<string, ProviderData>
-
-export type OAuthAuthEntry = { type: "oauth"; refresh: string; access: string; expires: number; accountId?: string; enterpriseUrl?: string }
-
-export type AuthEntry =
-  | OAuthAuthEntry
-  | { type: "api"; key: string; metadata?: Record<string, string> }
+export type OAuthAuthEntry = {
+  type: "oauth"
+  refresh: string
+  access: string
+  expires: number
+  accountId?: string
+  enterpriseUrl?: string
+}
 
 // ── Paths ──
 
@@ -46,33 +41,104 @@ function defaultDataDir(): string {
 }
 
 let dataDir = defaultDataDir()
-let multiAuthPath = join(dataDir, "multi-auth.json")
+let dbPath = join(dataDir, "multi-auth.db")
 let authJsonPath = join(dataDir, "auth.json")
+let db: Database | undefined
 
 /** Override the data directory. Used by tests. */
 export function configure(dir: string): void {
+  if (db) {
+    db.close()
+    db = undefined
+  }
   dataDir = dir
-  multiAuthPath = join(dir, "multi-auth.json")
+  dbPath = join(dir, "multi-auth.db")
   authJsonPath = join(dir, "auth.json")
   authJsonMtime = 0
   authJsonCache = {}
 }
 
-// ── Internal helpers ──
+/** Path to opencode's auth.json. Used by the plugin's file watcher. */
+export function getAuthJsonPath(): string {
+  return authJsonPath
+}
 
-function readStore(): MultiAuthStore {
-  try {
-    return JSON.parse(readFileSync(multiAuthPath, "utf-8"))
-  } catch {
-    return {}
+// ── Database ──
+
+function getDb(): Database {
+  if (db) return db
+  mkdirSync(dataDir, { recursive: true })
+  db = new Database(dbPath, { create: true })
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS accounts (
+      provider TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      fingerprint TEXT NOT NULL,
+      id TEXT NOT NULL,
+      label TEXT NOT NULL,
+      access TEXT NOT NULL,
+      refresh TEXT NOT NULL,
+      expires INTEGER NOT NULL,
+      account_id TEXT,
+      enterprise_url TEXT,
+      is_active INTEGER NOT NULL DEFAULT 0,
+      is_exhausted INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (provider, position)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_fingerprint ON accounts(provider, fingerprint);
+  `)
+  return db
+}
+
+type Row = {
+  provider: string
+  position: number
+  fingerprint: string
+  id: string
+  label: string
+  access: string
+  refresh: string
+  expires: number
+  account_id: string | null
+  enterprise_url: string | null
+  is_active: number
+  is_exhausted: number
+}
+
+function rowToAccount(row: Row): OAuthAccount {
+  return {
+    id: row.id,
+    type: "oauth",
+    label: row.label,
+    access: row.access,
+    refresh: row.refresh,
+    expires: row.expires,
+    ...(row.account_id !== null && { accountId: row.account_id }),
+    ...(row.enterprise_url !== null && { enterpriseUrl: row.enterprise_url }),
   }
 }
 
-function writeStore(store: MultiAuthStore): void {
-  try {
-    mkdirSync(dataDir, { recursive: true })
-    writeFileSync(multiAuthPath, JSON.stringify(store, null, 2), { mode: 0o600 })
-  } catch {}
+function accountToParams(
+  provider: string,
+  position: number,
+  account: OAuthAccount,
+  isActive: number,
+  isExhausted: number,
+): Record<string, string | number | null> {
+  return {
+    $provider: provider,
+    $position: position,
+    $fingerprint: fingerprint(account),
+    $id: account.id,
+    $label: account.label,
+    $access: account.access,
+    $refresh: account.refresh,
+    $expires: account.expires,
+    $account_id: account.accountId ?? null,
+    $enterprise_url: account.enterpriseUrl ?? null,
+    $is_active: isActive,
+    $is_exhausted: isExhausted,
+  }
 }
 
 // ── auth.json mtime cache ──
@@ -94,29 +160,57 @@ function readAuthJsonAll(): Record<string, unknown> {
 
 // ── Public API ──
 
-export function fingerprint(account: Account): string {
-  let input: string
-  if (account.type === "oauth") {
-    if (account.userId) input = `oauth:userId:${account.userId}`
-    else if (account.accountId) input = `oauth:accountId:${account.accountId}`
-    else input = `oauth:refresh:${account.refresh}`
-  } else {
-    input = `api:${account.key}`
-  }
-  return createHash("sha256").update(input).digest("hex")
+export function fingerprint(account: OAuthAccount): string {
+  return createHash("sha256").update(`oauth:id:${account.id}`).digest("hex")
 }
 
 export function read(provider: string): ProviderData | undefined {
-  return readStore()[provider]
+  const rows = getDb()
+    .prepare("SELECT * FROM accounts WHERE provider = $provider ORDER BY position")
+    .all({ $provider: provider }) as Row[]
+
+  if (rows.length === 0) return undefined
+
+  const accounts = rows.map(rowToAccount)
+  const activeIdx = rows.findIndex((r) => r.is_active === 1)
+  const exhausted: number[] = []
+  rows.forEach((r, i) => {
+    if (r.is_exhausted === 1) exhausted.push(i)
+  })
+
+  return {
+    active: activeIdx === -1 ? 0 : activeIdx,
+    accounts,
+    exhausted,
+  }
 }
 
 export function write(provider: string, data: ProviderData): void {
-  const store = readStore()
-  store[provider] = data
-  writeStore(store)
+  const d = getDb()
+  const tx = d.transaction((value: ProviderData) => {
+    d.prepare("DELETE FROM accounts WHERE provider = $provider").run({ $provider: provider })
+    const insert = d.prepare(`
+      INSERT INTO accounts (
+        provider, position, fingerprint, id, label,
+        access, refresh, expires, account_id, enterprise_url,
+        is_active, is_exhausted
+      ) VALUES (
+        $provider, $position, $fingerprint, $id, $label,
+        $access, $refresh, $expires, $account_id, $enterprise_url,
+        $is_active, $is_exhausted
+      )
+    `)
+    const exhaustedSet = new Set(value.exhausted)
+    value.accounts.forEach((account, i) => {
+      insert.run(
+        accountToParams(provider, i, account, i === value.active ? 1 : 0, exhaustedSet.has(i) ? 1 : 0),
+      )
+    })
+  })
+  tx(data)
 }
 
-export function add(provider: string, account: Account): number {
+export function add(provider: string, account: OAuthAccount): number {
   const data = read(provider) ?? { active: 0, accounts: [], exhausted: [] }
   const fp = fingerprint(account)
   const existingIdx = data.accounts.findIndex((a) => fingerprint(a) === fp)
@@ -165,16 +259,14 @@ export function next(provider: string): number | undefined {
   return undefined
 }
 
-export function readAuthJson(provider: string): AuthEntry | undefined {
+export function readAuthJson(provider: string): OAuthAuthEntry | undefined {
   const all = readAuthJsonAll()
   const entry = all[provider]
   if (!entry || typeof entry !== "object") return undefined
   const e = entry as Record<string, unknown>
-  if (e.type === "oauth" && typeof e.refresh === "string" && typeof e.access === "string" && typeof e.expires === "number") {
-    return entry as AuthEntry
+  if (e.type !== "oauth") return undefined
+  if (typeof e.refresh !== "string" || typeof e.access !== "string" || typeof e.expires !== "number") {
+    return undefined
   }
-  if (e.type === "api" && typeof e.key === "string") {
-    return entry as AuthEntry
-  }
-  return undefined
+  return entry as OAuthAuthEntry
 }

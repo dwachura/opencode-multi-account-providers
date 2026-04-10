@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test"
-import { mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import * as storage from "../src/storage"
@@ -10,12 +10,14 @@ import plugin from "../src/index"
 
 let testDir: string
 let authSetCalls: Array<{ path: { id: string }; body: any }>
+let toastCalls: Array<{ variant: string; message: string; title?: string }>
 let mockClient: any
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "multi-account-plugin-test-"))
   storage.configure(testDir)
   authSetCalls = []
+  toastCalls = []
   mockClient = {
     auth: {
       set: mock(async (args: any) => {
@@ -25,31 +27,50 @@ beforeEach(() => {
     app: {
       log: mock(async () => {}),
     },
+    tui: {
+      showToast: mock(async (args: { body: { variant: string; message: string; title?: string } }) => {
+        toastCalls.push(args.body)
+      }),
+    },
   }
 })
 
 // ── Helpers ──
 
-async function createHooks(providers?: string[]) {
-  const opts = providers ? { providers } : undefined
-  return plugin.server!({ client: mockClient } as any, opts)
+async function createHooks(provider: string) {
+  return plugin.server!({ client: mockClient } as any, { provider })
 }
 
-function makeOpenAiJwt(claims: { userId?: string; email?: string }): string {
+async function waitFor(check: () => boolean, timeoutMs = 1500) {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (check()) return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error("Timed out waiting for condition")
+}
+
+function makeOpenAiJwt(claims: { chatgptId?: string; sub?: string; openaiEmail?: string; email?: string }): string {
   const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url")
   const payload: Record<string, unknown> = { iat: 1234567890 }
-  if (claims.userId) {
-    payload["https://api.openai.com/auth"] = { chatgpt_account_user_id: claims.userId }
+  if (claims.chatgptId) {
+    payload["https://api.openai.com/auth"] = { chatgpt_account_user_id: claims.chatgptId }
+  }
+  if (claims.sub) {
+    payload.sub = claims.sub
+  }
+  if (claims.openaiEmail) {
+    payload["https://api.openai.com/profile"] = { email: claims.openaiEmail }
   }
   if (claims.email) {
-    payload["https://api.openai.com/profile"] = { email: claims.email }
+    payload.email = claims.email
   }
   const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url")
   return `${header}.${payloadB64}.fake-signature`
 }
 
 const oauthA: storage.OAuthAccount = {
-  userId: "acct_a",
+  id: "user_a",
   label: "openai",
   type: "oauth",
   access: "access-a",
@@ -59,7 +80,7 @@ const oauthA: storage.OAuthAccount = {
 }
 
 const oauthB: storage.OAuthAccount = {
-  userId: "acct_b",
+  id: "user_b",
   label: "openai",
   type: "oauth",
   access: "access-b",
@@ -78,6 +99,16 @@ function chatParamsInput(sessionID: string, providerID: string) {
   }
 }
 
+async function runChatParams(hooks: Awaited<ReturnType<typeof createHooks>>, sessionID: string, providerID: string) {
+  await hooks["chat.params"]!(chatParamsInput(sessionID, providerID), {
+    temperature: 0,
+    topP: 1,
+    topK: 0,
+    maxOutputTokens: undefined,
+    options: {},
+  })
+}
+
 // ── Plugin identity ──
 
 describe("plugin module", () => {
@@ -86,40 +117,21 @@ describe("plugin module", () => {
   })
 
   test("server returns hooks", async () => {
-    const hooks = await createHooks()
+    const hooks = await createHooks("openai")
     expect(hooks["chat.params"]).toBeDefined()
     expect(hooks.event).toBeDefined()
+  })
+
+  test("server throws when provider option is missing", async () => {
+    await expect(plugin.server!({ client: mockClient } as any, undefined)).rejects.toThrow(/provider/)
   })
 })
 
 // ── chat.params: auto-detection ──
 
 describe("chat.params — auto-detection", () => {
-  test("detects oauth account from auth.json", async () => {
-    writeFileSync(
-      join(testDir, "auth.json"),
-      JSON.stringify({
-        openai: {
-          type: "oauth",
-          refresh: "r1",
-          access: "a1",
-          expires: 9999999999999,
-          accountId: "acct_1",
-        },
-      }),
-    )
-
-    const hooks = await createHooks(["openai"])
-    await hooks["chat.params"]!(chatParamsInput("s1", "openai"))
-
-    const data = storage.read("openai")
-    expect(data).toBeDefined()
-    expect(data!.accounts).toHaveLength(1)
-    expect(data!.accounts[0].type).toBe("oauth")
-  })
-
-  test("extracts userId and email from ChatGPT JWT", async () => {
-    const jwt = makeOpenAiJwt({ userId: "user_abc", email: "alice@example.com" })
+  test("extracts id and label from ChatGPT-specific claims", async () => {
+    const jwt = makeOpenAiJwt({ chatgptId: "user_abc", openaiEmail: "alice@example.com" })
     writeFileSync(
       join(testDir, "auth.json"),
       JSON.stringify({
@@ -132,16 +144,60 @@ describe("chat.params — auto-detection", () => {
       }),
     )
 
-    const hooks = await createHooks(["openai"])
-    await hooks["chat.params"]!(chatParamsInput("s1", "openai"))
+    const hooks = await createHooks("openai")
+    await runChatParams(hooks, "s1", "openai")
 
     const data = storage.read("openai")
+    expect(data!.accounts).toHaveLength(1)
     const account = data!.accounts[0] as storage.OAuthAccount
-    expect(account.userId).toBe("user_abc")
+    expect(account.id).toBe("user_abc")
     expect(account.label).toBe("alice@example.com")
   })
 
-  test("falls back to accountId when JWT has no ChatGPT claims", async () => {
+  test("falls back to JWT sub and email claims when ChatGPT claims missing", async () => {
+    const jwt = makeOpenAiJwt({ sub: "auth0|xyz", email: "bob@example.com" })
+    writeFileSync(
+      join(testDir, "auth.json"),
+      JSON.stringify({
+        openai: {
+          type: "oauth",
+          refresh: "r1",
+          access: jwt,
+          expires: 9999999999999,
+        },
+      }),
+    )
+
+    const hooks = await createHooks("openai")
+    await runChatParams(hooks, "s1", "openai")
+
+    const account = storage.read("openai")!.accounts[0] as storage.OAuthAccount
+    expect(account.id).toBe("auth0|xyz")
+    expect(account.label).toBe("bob@example.com")
+  })
+
+  test("uses provider id as label when no email claim is present", async () => {
+    const jwt = makeOpenAiJwt({ chatgptId: "user_no_email" })
+    writeFileSync(
+      join(testDir, "auth.json"),
+      JSON.stringify({
+        openai: {
+          type: "oauth",
+          refresh: "r1",
+          access: jwt,
+          expires: 9999999999999,
+        },
+      }),
+    )
+
+    const hooks = await createHooks("openai")
+    await runChatParams(hooks, "s1", "openai")
+
+    const account = storage.read("openai")!.accounts[0] as storage.OAuthAccount
+    expect(account.label).toBe("openai")
+  })
+
+  test("refuses to add account when access token is not a JWT", async () => {
     writeFileSync(
       join(testDir, "auth.json"),
       JSON.stringify({
@@ -155,13 +211,30 @@ describe("chat.params — auto-detection", () => {
       }),
     )
 
-    const hooks = await createHooks(["openai"])
-    await hooks["chat.params"]!(chatParamsInput("s1", "openai"))
+    const hooks = await createHooks("openai")
+    await runChatParams(hooks, "s1", "openai")
 
-    const data = storage.read("openai")
-    const account = data!.accounts[0] as storage.OAuthAccount
-    expect(account.userId).toBe("acct_fallback")
-    expect(account.label).toBe("openai")
+    expect(storage.read("openai")).toBeUndefined()
+  })
+
+  test("refuses to add account when JWT has no usable identity claims", async () => {
+    const jwt = makeOpenAiJwt({}) // no chatgptId, no sub
+    writeFileSync(
+      join(testDir, "auth.json"),
+      JSON.stringify({
+        openai: {
+          type: "oauth",
+          refresh: "r1",
+          access: jwt,
+          expires: 9999999999999,
+        },
+      }),
+    )
+
+    const hooks = await createHooks("openai")
+    await runChatParams(hooks, "s1", "openai")
+
+    expect(storage.read("openai")).toBeUndefined()
   })
 
   test("ignores api key accounts from auth.json", async () => {
@@ -172,8 +245,8 @@ describe("chat.params — auto-detection", () => {
       }),
     )
 
-    const hooks = await createHooks(["openai"])
-    await hooks["chat.params"]!(chatParamsInput("s1", "openai"))
+    const hooks = await createHooks("openai")
+    await runChatParams(hooks, "s1", "openai")
 
     // Should not store API key accounts
     expect(storage.read("openai")).toBeUndefined()
@@ -192,29 +265,77 @@ describe("chat.params — auto-detection", () => {
       }),
     )
 
-    const hooks = await createHooks(["openai"])
-    await hooks["chat.params"]!(chatParamsInput("s1", "anthropic"))
+    const hooks = await createHooks("openai")
+    await runChatParams(hooks, "s1", "anthropic")
 
     expect(storage.read("anthropic")).toBeUndefined()
   })
 
-  test("defaults to openai when no providers configured", async () => {
+})
+
+describe("auth.json watcher", () => {
+  test("multiple plugin instances can watch the same auth.json", async () => {
+    await createHooks("openai")
+    await createHooks("fake")
+
+    const jwt = makeOpenAiJwt({ chatgptId: "user_multi", openaiEmail: "multi@example.com" })
     writeFileSync(
       join(testDir, "auth.json"),
       JSON.stringify({
         openai: {
           type: "oauth",
-          refresh: "r",
-          access: "a",
+          refresh: "r-openai",
+          access: jwt,
+          expires: 9999999999999,
+        },
+        fake: {
+          type: "oauth",
+          refresh: "r-fake",
+          access: "fake-access-token",
           expires: 9999999999999,
         },
       }),
     )
 
-    const hooks = await createHooks() // no providers option
-    await hooks["chat.params"]!(chatParamsInput("s1", "openai"))
+    await waitFor(() => {
+      const openai = storage.read("openai")
+      const fake = storage.read("fake")
+      return openai?.accounts.length === 1 && fake?.accounts.length === 1
+    })
 
-    expect(storage.read("openai")).toBeDefined()
+    expect((storage.read("openai")!.accounts[0] as storage.OAuthAccount).id).toBe("user_multi")
+    const fakeAccount = storage.read("fake")!.accounts[0] as storage.OAuthAccount
+    expect(fakeAccount.id).toBe("fake-access-token")
+    expect(fakeAccount.label).toBe("fake-access-token")
+  })
+
+  test("watcher retries until auth directory exists", async () => {
+    const delayedDir = join(testDir, "missing-parent", "opencode")
+    storage.configure(delayedDir)
+
+    await createHooks("openai")
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    mkdirSync(delayedDir, { recursive: true })
+
+    const jwt = makeOpenAiJwt({ chatgptId: "user_delayed", openaiEmail: "delayed@example.com" })
+    writeFileSync(
+      join(delayedDir, "auth.json"),
+      JSON.stringify({
+        openai: {
+          type: "oauth",
+          refresh: "r-delayed",
+          access: jwt,
+          expires: 9999999999999,
+        },
+      }),
+    )
+
+    await waitFor(() => storage.read("openai")?.accounts.length === 1)
+
+    const account = storage.read("openai")!.accounts[0] as storage.OAuthAccount
+    expect(account.id).toBe("user_delayed")
+    expect(account.label).toBe("delayed@example.com")
   })
 })
 
@@ -226,12 +347,12 @@ describe("chat.params — rotation", () => {
     storage.add("openai", oauthB)
     storage.activate("openai", 0)
 
-    const hooks = await createHooks(["openai"])
+    const hooks = await createHooks("openai")
 
     rotation.track("s1", "openai")
     rotation.flag("s1")
 
-    await hooks["chat.params"]!(chatParamsInput("s1", "openai"))
+    await runChatParams(hooks, "s1", "openai")
 
     expect(authSetCalls).toHaveLength(1)
     expect(authSetCalls[0].path.id).toBe("openai")
@@ -246,11 +367,11 @@ describe("chat.params — rotation", () => {
     storage.exhaust("openai", 0)
     storage.exhaust("openai", 1)
 
-    const hooks = await createHooks(["openai"])
+    const hooks = await createHooks("openai")
     rotation.track("s3", "openai")
     rotation.flag("s3")
 
-    await hooks["chat.params"]!(chatParamsInput("s3", "openai"))
+    await runChatParams(hooks, "s3", "openai")
 
     expect(authSetCalls).toHaveLength(0)
   })
@@ -264,11 +385,11 @@ describe("chat.params — rotation", () => {
     storage.add("openai", withEnterprise)
     storage.activate("openai", 0)
 
-    const hooks = await createHooks(["openai"])
+    const hooks = await createHooks("openai")
     rotation.track("s4", "openai")
     rotation.flag("s4")
 
-    await hooks["chat.params"]!(chatParamsInput("s4", "openai"))
+    await runChatParams(hooks, "s4", "openai")
 
     expect(authSetCalls[0].body.accountId).toBe("acct_b")
     expect(authSetCalls[0].body.enterpriseUrl).toBe("https://ent.example.com")
@@ -295,7 +416,7 @@ describe("event — rate limit detection", () => {
     storage.add("openai", oauthB)
     storage.activate("openai", 0)
 
-    const hooks = await createHooks(["openai"])
+    const hooks = await createHooks("openai")
     rotation.track("s10", "openai")
     rotation.trackAccount("s10", 0)
 
@@ -309,7 +430,7 @@ describe("event — rate limit detection", () => {
     storage.add("openai", oauthA)
     storage.activate("openai", 0)
 
-    const hooks = await createHooks(["openai"])
+    const hooks = await createHooks("openai")
     rotation.track("s11", "openai")
     rotation.trackAccount("s11", 0)
 
@@ -321,7 +442,7 @@ describe("event — rate limit detection", () => {
     storage.add("openai", oauthA)
     storage.activate("openai", 0)
 
-    const hooks = await createHooks(["openai"])
+    const hooks = await createHooks("openai")
     rotation.track("s12", "openai")
     rotation.trackAccount("s12", 0)
 
@@ -333,7 +454,7 @@ describe("event — rate limit detection", () => {
     storage.add("openai", oauthA)
     storage.activate("openai", 0)
 
-    const hooks = await createHooks(["openai"])
+    const hooks = await createHooks("openai")
     rotation.track("s13", "openai")
     rotation.trackAccount("s13", 0)
 
@@ -345,7 +466,7 @@ describe("event — rate limit detection", () => {
     storage.add("anthropic", oauthA)
     storage.activate("anthropic", 0)
 
-    const hooks = await createHooks(["openai"])
+    const hooks = await createHooks("openai")
     rotation.track("s14", "anthropic")
     rotation.trackAccount("s14", 0)
 
@@ -358,7 +479,7 @@ describe("event — rate limit detection", () => {
     storage.add("openai", oauthB)
     storage.activate("openai", 1) // active is B
 
-    const hooks = await createHooks(["openai"])
+    const hooks = await createHooks("openai")
     rotation.track("s15", "openai")
     rotation.trackAccount("s15", 0) // but A was the account used
 
@@ -367,27 +488,19 @@ describe("event — rate limit detection", () => {
     expect(storage.read("openai")!.exhausted).toContain(0)
     expect(storage.read("openai")!.exhausted).not.toContain(1)
   })
-})
 
-// ── event: session.created ──
-
-describe("event — session.created", () => {
-  test("resets exhaustion on new session", async () => {
+  test("suppresses rate-limit warning toast when no next account exists", async () => {
     storage.add("openai", oauthA)
-    storage.add("openai", oauthB)
-    storage.exhaust("openai", 0)
-    storage.exhaust("openai", 1)
+    storage.activate("openai", 0)
 
-    const hooks = await createHooks(["openai"])
+    const hooks = await createHooks("openai")
+    rotation.track("s16", "openai")
+    rotation.trackAccount("s16", 0)
 
-    await hooks.event!({
-      event: {
-        type: "session.created" as const,
-        properties: { info: {} as any },
-      },
-    })
+    await hooks.event!(retryEvent("s16", "Rate Limited"))
 
-    expect(storage.read("openai")!.exhausted).toEqual([])
+    expect(toastCalls.some((toast) => toast.variant === "warning")).toBe(false)
+    expect(rotation.consume("s16")).toBe(true)
   })
 })
 
@@ -399,10 +512,10 @@ describe("end-to-end rotation flow", () => {
     storage.add("openai", oauthB)
     storage.activate("openai", 0)
 
-    const hooks = await createHooks(["openai"])
+    const hooks = await createHooks("openai")
 
     // Normal path — tracks session and account
-    await hooks["chat.params"]!(chatParamsInput("flow-1", "openai"))
+    await runChatParams(hooks, "flow-1", "openai")
     expect(rotation.provider("flow-1")).toBe("openai")
     expect(rotation.usedAccount("flow-1")).toBe(0)
 
@@ -421,10 +534,37 @@ describe("end-to-end rotation flow", () => {
     expect(storage.read("openai")!.exhausted).toContain(0)
 
     // Next chat.params call consumes flag and rotates
-    await hooks["chat.params"]!(chatParamsInput("flow-1", "openai"))
+    await runChatParams(hooks, "flow-1", "openai")
 
     expect(authSetCalls).toHaveLength(1)
     expect(authSetCalls[0].body.refresh).toBe("refresh-b")
     expect(storage.read("openai")!.active).toBe(1)
+  })
+
+  test("shows terminal error toast when all accounts are exhausted", async () => {
+    storage.add("openai", oauthA)
+    storage.activate("openai", 0)
+
+    const hooks = await createHooks("openai")
+    await runChatParams(hooks, "flow-2", "openai")
+
+    await hooks.event!({
+      event: {
+        type: "session.status",
+        properties: {
+          sessionID: "flow-2",
+          status: { type: "retry", attempt: 1, message: "Rate Limited", next: 2000 },
+        },
+      },
+    })
+
+    await runChatParams(hooks, "flow-2", "openai")
+
+    expect(toastCalls.some((toast) => toast.variant === "warning")).toBe(false)
+    expect(
+      toastCalls.some(
+        (toast) => toast.variant === "error" && toast.message === 'All accounts for "openai" are rate-limited',
+      ),
+    ).toBe(true)
   })
 })

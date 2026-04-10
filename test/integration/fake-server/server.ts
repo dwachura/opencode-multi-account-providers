@@ -3,6 +3,19 @@ import * as db from "./db"
 const MODEL_ID = "fake-model-v1"
 const CANNED_RESPONSE = "I'm a fake LLM server for testing multi-account rotation. Your request was processed successfully."
 
+function logResponseEvent(input: {
+  outcome: "ok" | "rate_limited"
+  stream: boolean
+  user: db.User
+}) {
+  const current = db.getById(input.user.id) ?? input.user
+  const mode = input.stream ? "stream" : "sync"
+  const usage = `${current.req_used}/${current.req_limit} req, ${current.tok_used}/${current.tok_limit} tok`
+  console.log(
+    `[fake-server] ${input.outcome} ${mode} user=${current.id} token=${current.access_token ?? "-"} account=${current.account_id ?? "-"} usage=${usage}`,
+  )
+}
+
 // ── Auth middleware ──
 
 function authenticate(req: Request): db.User | Response {
@@ -87,6 +100,7 @@ function nonStreamingResponse(user: db.User): Response {
   const inputTokens = 20
   const outputTokens = text.split(/\s+/).length * 2 // rough estimate
   db.incrementUsage(user.id, inputTokens + outputTokens)
+  logResponseEvent({ outcome: "ok", stream: false, user })
 
   return Response.json({
     id: makeResponseId(),
@@ -117,6 +131,7 @@ function streamingResponse(user: db.User): Response {
   const inputTokens = 20
   const outputTokens = words.length * 2
   db.incrementUsage(user.id, inputTokens + outputTokens)
+  logResponseEvent({ outcome: "ok", stream: true, user })
 
   const respId = makeResponseId()
   const msgId = makeMsgId()
@@ -275,7 +290,10 @@ function handleResponses(req: Request, body: any): Response {
   const user = userOrErr
 
   const limited = checkRateLimit(user)
-  if (limited) return limited
+  if (limited) {
+    logResponseEvent({ outcome: "rate_limited", stream: Boolean(body.stream), user })
+    return limited
+  }
 
   if (body.stream) {
     return streamingResponse(user)
@@ -365,11 +383,32 @@ function handleAdminSetTokens(id: string, body: any): Response {
   return Response.json(db.getById(id))
 }
 
+function handleAdminCreateUser(body: any): Response {
+  if (!body.id || typeof body.id !== "string") {
+    return Response.json({ error: "id required" }, { status: 400 })
+  }
+  if (!body.name || typeof body.name !== "string") {
+    return Response.json({ error: "name required" }, { status: 400 })
+  }
+  try {
+    return Response.json(db.createUser(body), { status: 201 })
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 })
+  }
+}
+
+function handleAdminDeleteUser(id: string): Response {
+  if (!db.deleteUser(id)) {
+    return Response.json({ error: "not found" }, { status: 404 })
+  }
+  return Response.json({ ok: true })
+}
+
 // ── Server ──
 
-export function start(port = 18080) {
+export function start(port = 18080, options?: { seed?: boolean }) {
   db.init()
-  db.seed()
+  if (options?.seed !== false) db.seed()
 
   const server = Bun.serve({
     port,
@@ -397,8 +436,15 @@ export function start(port = 18080) {
       if (method === "GET" && path === "/admin/users") {
         return handleAdminGetUsers()
       }
+      if (method === "POST" && path === "/admin/users") {
+        const body = await req.json()
+        return handleAdminCreateUser(body)
+      }
       if (method === "GET" && path.startsWith("/admin/users/")) {
         return handleAdminGetUser(path.split("/")[3])
+      }
+      if (method === "DELETE" && path.match(/^\/admin\/users\/[^/]+$/)) {
+        return handleAdminDeleteUser(path.split("/")[3])
       }
       if (method === "PUT" && path.match(/^\/admin\/users\/[^/]+\/limits$/)) {
         const id = path.split("/")[3]
@@ -426,15 +472,22 @@ export function start(port = 18080) {
   console.log(`  GET  /v1/models      — Model listing`)
   console.log(`  POST /oauth/token    — OAuth token refresh`)
   console.log(`  GET  /admin/users    — List all users`)
+  console.log(`  POST /admin/users    — Create user`)
   console.log(`  GET  /admin/users/:id`)
+  console.log(`  DELETE /admin/users/:id`)
   console.log(`  PUT  /admin/users/:id/limits   { req_limit, tok_limit }`)
   console.log(`  PUT  /admin/users/:id/tokens   { access_token, refresh_token, expires }`)
   console.log(`  POST /admin/users/:id/reset`)
   console.log(`  POST /admin/reset    — Reset all usage counters`)
   console.log()
-  console.log(`Seeded users:`)
-  for (const u of db.listAll()) {
-    console.log(`  ${u.name} (${u.id}): key=${u.api_key}  oauth=${u.access_token}  account=${u.account_id}  limits=${u.req_limit}req/${u.tok_limit}tok`)
+  const users = db.listAll()
+  if (users.length) {
+    console.log(`Seeded users:`)
+    for (const u of users) {
+      console.log(`  ${u.name} (${u.id}): key=${u.api_key}  oauth=${u.access_token}  account=${u.account_id}  limits=${u.req_limit}req/${u.tok_limit}tok`)
+    }
+  } else {
+    console.log(`No seeded users`)
   }
 
   return server
@@ -442,5 +495,8 @@ export function start(port = 18080) {
 
 // Run directly: bun run test/fake-llm-server/server.ts
 if (import.meta.main) {
-  start()
+  const port = Number(process.argv[2])
+  start(Number.isFinite(port) && port > 0 ? port : undefined, {
+    seed: process.env.FAKE_SERVER_SEED !== "0",
+  })
 }

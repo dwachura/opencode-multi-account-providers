@@ -2,11 +2,13 @@
 
 An [opencode](https://opencode.ai) v1 plugin that automatically rotates between multiple OAuth accounts for the same LLM provider when one hits a rate limit.
 
-If you have two ChatGPT Pro subscriptions and one gets rate-limited mid-conversation, this plugin transparently switches to the other account on the next retry — no manual intervention needed.
+If you have two ChatGPT Pro subscriptions and one gets rate-limited mid-conversation, this plugin transparently switches to the other account on the next retry with no manual intervention.
 
 ## How it works
 
-The plugin uses `auth.json` as a side-channel. When a rate limit is detected, it writes the next account's OAuth credentials to `auth.json` so the provider's auth plugin (e.g., the built-in Codex plugin for OpenAI) picks them up on the next request.
+The plugin uses `auth.json` as a side-channel. It watches `auth.json` to capture accounts when `opencode auth login <provider>` writes new credentials, then later writes rotated OAuth credentials back through `client.auth.set()` when a rate limit is detected.
+
+A compatible provider auth plugin, such as the built-in Codex plugin for OpenAI, re-reads `auth.json` on the next request and uses the new credentials.
 
 ```
 1. You send a message
@@ -20,9 +22,9 @@ The plugin uses `auth.json` as a side-channel. When a rate limit is detected, it
 
 ## Important: OAuth accounts only
 
-This plugin only works with **OAuth-based accounts** (e.g., ChatGPT Pro/Plus subscriptions authenticated via browser login). API key accounts are not supported because their credentials are cached by the SDK at startup and not re-read on each request.
+This plugin only works with **OAuth-based accounts** (e.g., ChatGPT Pro/Plus subscriptions authenticated via browser login). API key accounts are not supported because their credentials are typically resolved once and not re-read on each request.
 
-The rotation mechanism depends on the provider's auth plugin implementing a per-request fetch wrapper that re-reads `auth.json` before every HTTP call. The built-in **Codex plugin** (which handles OpenAI OAuth) does this. Custom providers or API-key-based providers do not.
+The rotation mechanism depends on the provider's auth plugin implementing a per-request fetch wrapper that re-reads `auth.json` before every HTTP call. The built-in **Codex plugin** for OpenAI does this. Other providers only work if they have equivalent auth-plugin behavior.
 
 ## Installation
 
@@ -35,7 +37,7 @@ Add the plugin to your `opencode.json`:
 ```json
 {
   "plugin": [
-    ["opencode-multi-account-providers", { "providers": ["openai"] }]
+    ["opencode-multi-account-providers", { "provider": "openai" }]
   ]
 }
 ```
@@ -44,17 +46,36 @@ Add the plugin to your `opencode.json`:
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `providers` | `string[]` | `["openai"]` | Provider IDs to manage. Only providers with OAuth auth and a compatible auth plugin (like Codex) will work. |
+| `provider` | `string` | none | Provider ID managed by this plugin instance. Best-supported path is `"openai"`. |
+
+To manage multiple providers, add the plugin more than once with different `provider` values.
 
 ## Setup
 
-1. Log in to opencode with your first account (`/connect` or `opencode auth login openai`)
-2. Send a message — the plugin auto-detects the account from `auth.json`
-3. Log in with your second account
-4. Send another message — the plugin detects the new account
-5. Both accounts are now tracked in `multi-auth.json`
+The plugin captures accounts automatically from opencode's `auth.json`.
+
+1. Log in to your first account (`opencode auth login openai`)
+2. If identity extraction succeeds, the plugin captures the account when `auth.json` is rewritten
+3. Log in to your second account
+4. If identity extraction succeeds, the plugin captures that account too
+5. Accounts are stored in `multi-auth.db`
+
+If the plugin starts after `auth.json` already exists, the current account is captured on the first chat request as a cold-start fallback.
 
 From this point on, rate limits trigger automatic rotation.
+
+### Why watch `auth.json`
+
+The plugin watches opencode's `auth.json` so each `opencode auth login <provider>` can be captured automatically as soon as credentials are written.
+
+This keeps provider auth flows unchanged: opencode still owns `auth.json`, and the plugin records accounts from those updates into its own storage.
+
+The watcher is the primary capture path, but it is still best-effort:
+
+- it retries until the `auth.json` parent directory exists
+- it only stores accounts when identity extraction succeeds for the current provider
+
+`chat.params` remains the fallback path when the watcher misses an update or the plugin starts after `auth.json` already exists.
 
 ## Architecture
 
@@ -62,40 +83,45 @@ From this point on, rate limits trigger automatic rotation.
 
 ```
 src/
-  index.ts       Plugin entry — chat.params and event hooks
-  storage.ts     multi-auth.json CRUD, auth.json reading with mtime cache
-  rotation.ts    In-memory session-to-provider tracking, rotation flags
+  index.ts            Plugin entry, auth.json watcher, chat.params and event hooks
+  storage.ts          SQLite storage, auth.json reading with mtime cache
+  rotation.ts         In-memory session/provider tracking and rotation flags
+  identity.ts         Provider identity extractor registry
+  identity-openai.ts  OpenAI JWT identity extraction
 ```
 
-### Storage (`multi-auth.json`)
+### Storage (`multi-auth.db`)
 
-The plugin maintains its own credential store at `$XDG_DATA_HOME/opencode/multi-auth.json` (alongside opencode's `auth.json`). Each managed provider gets an entry:
+The plugin stores account state at `$XDG_DATA_HOME/opencode/multi-auth.db` alongside opencode's `auth.json`.
 
-```json
-{
-  "openai": {
-    "active": 0,
-    "accounts": [
-      { "type": "oauth", "access": "...", "refresh": "...", "expires": 123, "accountId": "acct_1" },
-      { "type": "oauth", "access": "...", "refresh": "...", "expires": 123, "accountId": "acct_2" }
-    ],
-    "exhausted": [0]
-  }
-}
-```
+Stored state includes:
 
-Accounts are deduplicated by a SHA-256 fingerprint based on `accountId` (stable across token refreshes) or `refresh` token as fallback.
+- provider ID
+- account position
+- stable account fingerprint
+- extracted account identity and label
+- OAuth credentials
+- active account flag
+- exhausted account flag
+
+Accounts are deduplicated by a stable provider identity extracted from the OAuth access token. For OpenAI, this comes from JWT claims. Providers without a dedicated identity extractor fall back to using the access token itself, which is not stable across token refreshes.
 
 ### Hooks
 
 **`chat.params`** (awaited before every LLM request):
 - Tracks which session maps to which provider
-- On normal path: reads `auth.json`, auto-detects and stores new OAuth accounts
 - On rotation path: consumes the rotation flag, activates the next non-exhausted account, writes its credentials to `auth.json` via `client.auth.set()`
+- On normal path: cold-start fallback that reads `auth.json` and captures the current account if it was not already recorded
 
 **`event`** (fire-and-forget on every bus event):
-- On `session.status` with `type: "retry"`: checks if the message indicates a rate limit, exhausts the account that was used for the request, flags rotation for the session
-- On `session.created`: resets exhaustion for all managed providers
+- On `session.status` with `type: "retry"`: checks if the message indicates a rate limit, exhausts the account actually used for the failed request, and flags rotation for the session
+
+### Account Detection
+
+The plugin captures new accounts in two ways:
+
+1. **Primary path:** a best-effort filesystem watcher observes `auth.json` and records successful `opencode auth login` writes
+2. **Fallback path:** `chat.params` captures the current account on the first request if the plugin started after `auth.json` already existed
 
 ### Rotation state (`rotation.ts`)
 
@@ -122,14 +148,18 @@ When credentials are rotated, the retry that triggered the rotation may still us
 ## Assumptions and dependencies
 
 - **opencode >= 1.3.0** with the v1 plugin API
-- **OAuth provider with per-request auth.json reads.** The built-in Codex plugin (for OpenAI) implements a custom `fetch` wrapper that calls `getAuth()` on every HTTP request, re-reading `auth.json` each time. This is what makes the side-channel rotation work. Providers that resolve credentials once at startup (API key providers, custom providers without an auth plugin) will not pick up rotated credentials.
+- **OAuth provider with per-request auth.json reads.** The built-in Codex plugin for OpenAI implements a custom `fetch` wrapper that calls `getAuth()` on every HTTP request, re-reading `auth.json` each time. This is what makes the side-channel rotation work. Other providers only work if their auth plugin does the same.
+- **Provider-specific identity extraction may be required.** OpenAI has a dedicated extractor. Other providers currently fall back to access-token-based identity, which may create duplicate accounts after token refresh.
 - **File-based auth.json.** The plugin reads and writes `$XDG_DATA_HOME/opencode/auth.json` directly (for reading) and via `client.auth.set()` (for writing). This assumes opencode's auth storage is file-based at that path.
 - **Synchronous event hooks.** The `event` hook must complete synchronously. All rotation state operations are single-line assignments with no I/O.
 
 ## Known limitations
 
-- **Exhaustion reset is per-session.** Currently, `session.created` clears the exhaustion list. Rate limits are global (provider-side), so a new session will re-try accounts that may still be rate-limited. A better approach would be time-based expiry or manual reset.
+- **Single provider per plugin instance.** Configuration uses `provider`, not `providers`.
+- **Best support is currently OpenAI.** Other providers need a compatible auth plugin and may need a provider-specific identity extractor.
+- **Exhaustion reset is not yet automatic.** Exhausted accounts are not currently reset on `session.created`.
 - **Single wasted retry after rotation.** Due to credential caching in the provider's fetch wrapper, the first retry after rotation may still use the old account's credentials. The second retry will use the new ones.
+- **Watcher is best-effort.** Filesystem notifications are used for automatic capture, with `chat.params` as the cold-start fallback.
 
 ## Development
 
@@ -151,7 +181,79 @@ bun test test/integration/integration.test.ts
 
 # Run everything
 bun test
+
+# Launch interactive fake-server + opencode TUI harness
+bun run e2e:tui
+
+# From another terminal, manage fake accounts in the running env
+bun run e2e:account:add alpha 2
+bun run e2e:account:add beta 2
+bun run e2e:account:list
+bun run e2e:account:remove alpha
+
+# Force rate limiting and reset state
+bun run e2e:limit alpha 1
+bun run e2e:reset
 ```
+
+### Interactive E2E harness
+
+`bun run e2e:tui` starts:
+
+- the fake LLM server on `http://localhost:${E2E_FAKE_PORT:-18080}` with no predefined users
+- a fresh temporary opencode config under `.test-env/interactive/`
+- a bootstrap `auth.json` entry so the fake auth plugin attaches on startup
+- `opencode` with the built-in `title` agent disabled, so visible prompts do not spend extra requests on automatic title generation
+- fake server logs redirected to `fake-server.log`, so they do not overlap the opencode TUI
+- the normal `opencode` TUI pointed at that isolated environment
+
+While the TUI is running, use the helper scripts from another terminal to:
+
+- create a fake account with any label you want; its user id, access token, refresh token, and account id all use that same label
+- optionally pass an initial request limit as the second argument to `e2e:account:add`
+- add that fake account by rewriting `auth.json` and letting the plugin watcher capture it
+- list stored accounts from `multi-auth.db`
+- remove stored accounts from `multi-auth.db`
+- lower request limits to force rotation
+- reset fake-server usage and clear exhausted flags
+
+Suggested manual demo:
+
+1. Run `bun run e2e:tui`
+2. In another shell, run `bun run e2e:account:add alpha 2`
+3. Then run `bun run e2e:account:add beta 2`
+4. Optionally add a third account with `bun run e2e:account:add gamma 2`
+5. In the TUI, send prompts using provider `fake` / model `fake-model-v1`
+6. Observe watcher capture, rate-limit handling, and rotation
+
+If you want to force rotation immediately, lower the active account limit with `bun run e2e:limit alpha 1`.
+
+Notes:
+
+- Before you add a real fake account, the bootstrap credentials are intentionally invalid for the fake server.
+- `e2e:account:add <label> [limit]` both creates the fake server user and rewrites `auth.json` so the plugin watcher captures it.
+- `e2e:account:remove <label>` removes the stored plugin account and deletes the fake server user.
+- `bun run e2e:tui` prints the path to `fake-server.log`; use `tail -f` from another terminal to inspect which account served each request and current usage.
+
+### Fake server admin API
+
+The fake server used by integration tests and the interactive harness exposes:
+
+- `GET /admin/users`
+- `POST /admin/users`
+- `GET /admin/users/:id`
+- `DELETE /admin/users/:id`
+- `PUT /admin/users/:id/limits`
+- `PUT /admin/users/:id/tokens`
+- `POST /admin/users/:id/reset`
+- `POST /admin/reset`
+
+Interactive `e2e:tui` starts the fake server with `FAKE_SERVER_SEED=0`, so users are created on demand by `e2e:account:add`.
+
+## Future Work
+
+- provider account management directly from the opencode TUI
+- account usage tracking, likely combining local request/token counting with provider-side checks; for OpenAI this can include `GET https://api.openai.com/v1/usage`
 
 ### Integration test infrastructure
 
@@ -159,4 +261,4 @@ Integration tests run a real `opencode serve` instance against a fake LLM server
 
 - **`test/integration/fake-server/`** — Bun HTTP server implementing the OpenAI Responses API with SQLite-backed user accounts, rate limiting, and OAuth token support. Admin API for controlling limits and usage.
 - **`test/integration/auth-plugin/`** — Test-only opencode plugin that provides a Codex-like fetch wrapper for the `"fake"` provider. Re-reads `auth.json` on every request and passes the access token as a Bearer header, without rewriting URLs.
-- **`.test-env/`** — Isolated environment (gitignored) with its own `auth.json`, `multi-auth.json`, and `opencode.json`, controlled via `XDG_DATA_HOME` and `OPENCODE_CONFIG_DIR`.
+- **`.test-env/`** — Isolated environment (gitignored) with its own `auth.json`, `multi-auth.db`, and `opencode.json`, controlled via `XDG_DATA_HOME` and `OPENCODE_CONFIG_DIR`.

@@ -40,6 +40,18 @@ export function seed(): void {
   insert.run("user-c", "sk-test-user-c", "Carol", 5, 1_000, "access-c", "refresh-c", expires, "acct_carol")
 }
 
+export type CreateUserInput = {
+  id: string
+  name: string
+  api_key?: string
+  req_limit?: number
+  tok_limit?: number
+  access_token?: string
+  refresh_token?: string
+  token_expires?: number
+  account_id?: string | null
+}
+
 export type User = {
   id: string
   api_key: string
@@ -72,6 +84,32 @@ export function getById(id: string): User | null {
 
 export function listAll(): User[] {
   return db.prepare("SELECT * FROM users").all() as User[]
+}
+
+export function createUser(input: CreateUserInput): User {
+  const expires = input.token_expires ?? Date.now() + 3600_000
+  db.prepare(`
+    INSERT INTO users (
+      id, api_key, name, req_limit, tok_limit,
+      access_token, refresh_token, token_expires, account_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    input.id,
+    input.api_key ?? `sk-${input.id}`,
+    input.name,
+    input.req_limit ?? 100,
+    input.tok_limit ?? 100_000,
+    input.access_token ?? input.id,
+    input.refresh_token ?? `refresh-${input.id}`,
+    expires,
+    input.account_id ?? input.id,
+  )
+  return getById(input.id)!
+}
+
+export function deleteUser(id: string): boolean {
+  const result = db.prepare("DELETE FROM users WHERE id = ?").run(id)
+  return result.changes > 0
 }
 
 export function incrementUsage(id: string, tokens: number): void {

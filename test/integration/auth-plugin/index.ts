@@ -23,11 +23,11 @@ const plugin: PluginModule = {
       auth: {
         provider: "fake",
         async loader(getAuth) {
-          const auth = await getAuth()
-          if (auth.type !== "oauth") return {}
-
           return {
             // Dummy key — the fetch wrapper overrides the Authorization header
+            // when OAuth credentials exist. Keeping this present avoids the
+            // OpenAI provider rejecting requests before the interactive harness
+            // has written the first auth.json entry.
             apiKey: "fake-oauth-dummy",
             async fetch(requestInput: RequestInfo | URL, init?: RequestInit) {
               const currentAuth = await getAuth()
