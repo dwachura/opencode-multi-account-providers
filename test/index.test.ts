@@ -277,6 +277,7 @@ describe("auth.json watcher", () => {
   test("multiple plugin instances can watch the same auth.json", async () => {
     await createHooks("openai")
     await createHooks("fake")
+    await new Promise((resolve) => setTimeout(resolve, 50))
 
     const jwt = makeOpenAiJwt({ chatgptId: "user_multi", openaiEmail: "multi@example.com" })
     writeFileSync(
@@ -450,6 +451,18 @@ describe("event — rate limit detection", () => {
     expect(rotation.consume("s12")).toBe(true)
   })
 
+  test("flags rotation on usage limit message", async () => {
+    storage.add("openai", oauthA)
+    storage.activate("openai", 0)
+
+    const hooks = await createHooks("openai")
+    rotation.track("s12b", "openai")
+    rotation.trackAccount("s12b", 0)
+
+    await hooks.event!(retryEvent("s12b", "The usage limit has been reached"))
+    expect(rotation.consume("s12b")).toBe(true)
+  })
+
   test("ignores non-rate-limit retry messages", async () => {
     storage.add("openai", oauthA)
     storage.activate("openai", 0)
@@ -525,7 +538,7 @@ describe("end-to-end rotation flow", () => {
         type: "session.status",
         properties: {
           sessionID: "flow-1",
-          status: { type: "retry", attempt: 1, message: "Rate Limited", next: 2000 },
+          status: { type: "retry", attempt: 1, message: "The usage limit has been reached", next: 2000 },
         },
       },
     })
@@ -553,7 +566,7 @@ describe("end-to-end rotation flow", () => {
         type: "session.status",
         properties: {
           sessionID: "flow-2",
-          status: { type: "retry", attempt: 1, message: "Rate Limited", next: 2000 },
+          status: { type: "retry", attempt: 1, message: "The usage limit has been reached", next: 2000 },
         },
       },
     })

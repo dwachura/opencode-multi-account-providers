@@ -415,16 +415,24 @@ Suggested demo:
 
 async function launchTui() {
   const envRoot = defaultEnvRoot()
+  const homeDir = join(envRoot, "home")
   const dataDir = join(envRoot, "data", "opencode")
   const configDir = join(envRoot, "config")
+  const xdgConfigHome = join(envRoot, "xdg", "config")
+  const xdgCacheHome = join(envRoot, "xdg", "cache")
+  const xdgStateHome = join(envRoot, "xdg", "state")
   const authJsonPath = join(dataDir, "auth.json")
   const fakeLogPath = join(envRoot, "fake-server.log")
   const fakePort = Number(process.env.E2E_FAKE_PORT ?? 18080)
   const fakeBase = `http://localhost:${fakePort}`
 
   rmSync(envRoot, { recursive: true, force: true })
+  mkdirSync(homeDir, { recursive: true })
   mkdirSync(dataDir, { recursive: true })
   mkdirSync(configDir, { recursive: true })
+  mkdirSync(xdgConfigHome, { recursive: true })
+  mkdirSync(xdgCacheHome, { recursive: true })
+  mkdirSync(xdgStateHome, { recursive: true })
 
   const fakeLog = createWriteStream(fakeLogPath, { flags: "a" })
   const fakeServer = Bun.spawn({
@@ -492,7 +500,13 @@ async function launchTui() {
     env: {
       ...process.env,
       OPENCODE_CONFIG_DIR: configDir,
+      OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+      OPENCODE_TEST_HOME: homeDir,
+      HOME: homeDir,
       XDG_DATA_HOME: join(envRoot, "data"),
+      XDG_CONFIG_HOME: xdgConfigHome,
+      XDG_CACHE_HOME: xdgCacheHome,
+      XDG_STATE_HOME: xdgStateHome,
     },
   })
 

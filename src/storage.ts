@@ -43,6 +43,7 @@ function defaultDataDir(): string {
 let dataDir = defaultDataDir()
 let dbPath = join(dataDir, "multi-auth.db")
 let authJsonPath = join(dataDir, "auth.json")
+let logPath = join(dataDir, "log", "multi-account.log")
 let db: Database | undefined
 
 /** Override the data directory. Used by tests. */
@@ -54,6 +55,7 @@ export function configure(dir: string): void {
   dataDir = dir
   dbPath = join(dir, "multi-auth.db")
   authJsonPath = join(dir, "auth.json")
+  logPath = join(dir, "log", "multi-account.log")
   authJsonMtime = 0
   authJsonCache = {}
 }
@@ -61,6 +63,10 @@ export function configure(dir: string): void {
 /** Path to opencode's auth.json. Used by the plugin's file watcher. */
 export function getAuthJsonPath(): string {
   return authJsonPath
+}
+
+export function getLogPath(): string {
+  return logPath
 }
 
 // ── Database ──

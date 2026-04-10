@@ -253,6 +253,7 @@ Interactive `e2e:tui` starts the fake server with `FAKE_SERVER_SEED=0`, so users
 ## Future Work
 
 - provider account management directly from the opencode TUI
+- optional TUI confirm-before-switch flow for rate-limited accounts, configurable per plugin instance via `rotationMode: "auto" | "confirm"`
 - account usage tracking, likely combining local request/token counting with provider-side checks; for OpenAI this can include `GET https://api.openai.com/v1/usage`
 
 ### Integration test infrastructure
