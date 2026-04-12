@@ -4,7 +4,7 @@
 
 The local `/provider-accounts` flow exists, but one major piece is still deferred:
 
-- guided `Add account` flow inside the TUI
+- guided `Connect account` flow inside the TUI
 
 Current expectation for that work:
 

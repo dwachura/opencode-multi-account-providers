@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test"
 import { join } from "node:path"
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as storage from "../src/storage"
 import plugin from "../src/tui"
@@ -11,6 +11,9 @@ let renderedDialogs: any[]
 let toasts: any[]
 let authSetCalls: any[]
 let authRemoveCalls: any[]
+let providerAuthCalls: any[]
+let providerAuthorizeCalls: any[]
+let providerCallbackCalls: any[]
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "multi-account-plugin-tui-test-"))
@@ -20,13 +23,38 @@ beforeEach(() => {
   toasts = []
   authSetCalls = []
   authRemoveCalls = []
+  providerAuthCalls = []
+  providerAuthorizeCalls = []
+  providerCallbackCalls = []
 })
 
-function createApi(options: { authSetError?: Error, authRemoveError?: Error } = {}) {
+function writeOAuthAuth(provider: string, account: storage.OAuthAccount) {
+  writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+    [provider]: {
+      type: "oauth",
+      access: account.access,
+      refresh: account.refresh,
+      expires: account.expires,
+      ...(account.accountId ? { accountId: account.accountId } : {}),
+      ...(account.enterpriseUrl ? { enterpriseUrl: account.enterpriseUrl } : {}),
+    },
+  }))
+}
+
+function createApi(options: {
+  authSetError?: Error,
+  authRemoveError?: Error,
+  providerMethods?: Array<{ type: string, label: string, prompts?: unknown[] }>,
+  providerAuthData?: Record<string, Array<{ type: string, label: string, prompts?: unknown[] }>>,
+  authorizeResult?: any,
+  callbackError?: unknown,
+  callbackHandler?: (input: any) => void | Promise<void>,
+  statePath?: string,
+} = {}) {
   return {
     state: {
       path: {
-        state: testDir,
+        state: options.statePath ?? testDir,
       },
     },
     command: {
@@ -46,8 +74,39 @@ function createApi(options: { authSetError?: Error, authRemoveError?: Error } = 
           if (options.authRemoveError) throw options.authRemoveError
         }),
       },
+      provider: {
+        auth: mock(async (input: any) => {
+          providerAuthCalls.push(input)
+          return {
+            data: options.providerAuthData ?? {
+              openai: options.providerMethods ?? [{ type: "oauth", label: "Browser login" }],
+            },
+          }
+        }),
+        oauth: {
+          authorize: mock(async (input: any) => {
+            providerAuthorizeCalls.push(input)
+            return options.authorizeResult ?? {
+              data: {
+                method: "code",
+                url: "https://example.com/connect",
+                instructions: "Open the browser login",
+              },
+            }
+          }),
+          callback: mock(async (input: any) => {
+            providerCallbackCalls.push(input)
+            await options.callbackHandler?.(input)
+            return options.callbackError
+              ? { error: options.callbackError }
+              : { data: true }
+          }),
+        },
+      },
     },
     ui: {
+      DialogAlert: mock((props: any) => props),
+      DialogPrompt: mock((props: any) => props),
       DialogSelect: mock((props: any) => props),
       toast: mock((input: any) => {
         toasts.push(input)
@@ -67,7 +126,11 @@ describe("tui plugin module", () => {
   })
 
   test("registers local provider-accounts command", async () => {
-    const api = createApi()
+    const api = createApi({
+      providerAuthData: {
+        fake: [{ type: "oauth", label: "Fake OAuth" }],
+      },
+    })
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
     expect(api.command.register).toHaveBeenCalledTimes(1)
@@ -97,10 +160,10 @@ describe("tui plugin module", () => {
         placeholder: "Provider: openai | Accounts: 0",
         options: [
           {
-            title: "Add account",
-            value: { kind: "action", action: "add" },
+            title: "Connect account",
+            value: { kind: "action", action: "connect" },
             category: "Actions",
-            description: "Capture a new account through the normal auth flow",
+            description: "Connect a new account through the provider login flow",
           },
           {
             title: "Reset exhausted accounts",
@@ -120,6 +183,52 @@ describe("tui plugin module", () => {
         onSelect: expect.any(Function),
       },
     ])
+  })
+
+  test("uses shared configured storage instead of api.state.path.state", async () => {
+    const wrongPath = mkdtempSync(join(tmpdir(), "multi-account-plugin-tui-wrong-state-"))
+    storage.add("openai", {
+      id: "user_a",
+      label: "personal",
+      type: "oauth",
+      access: "access-a",
+      refresh: "refresh-a",
+      expires: Date.now() + 3600_000,
+      accountId: "acct_a",
+    })
+
+    const api = createApi({ statePath: wrongPath })
+    await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
+
+    registeredCommands!()[0].onSelect()
+
+    expect(renderedDialogs[0]).toEqual({
+      title: "Provider Accounts",
+      placeholder: "Provider: openai | Accounts: 1",
+      options: [
+        {
+          title: "Connect account",
+          value: { kind: "action", action: "connect" },
+          category: "Actions",
+          description: "Connect a new account through the provider login flow",
+        },
+        {
+          title: "Reset exhausted accounts",
+          value: { kind: "action", action: "reset" },
+          category: "Actions",
+          description: "Clear exhausted markers for all stored accounts",
+        },
+        {
+          title: "personal",
+          value: { kind: "account", index: 0 },
+          category: "Accounts",
+          description: "id: user_a | accountId: acct_a",
+          footer: "active",
+        },
+      ],
+      skipFilter: true,
+      onSelect: expect.any(Function),
+    })
   })
 
   test("lists stored accounts with active and exhausted markers", async () => {
@@ -155,10 +264,10 @@ describe("tui plugin module", () => {
         placeholder: "Provider: openai | Accounts: 2",
         options: [
           {
-            title: "Add account",
-            value: { kind: "action", action: "add" },
+            title: "Connect account",
+            value: { kind: "action", action: "connect" },
             category: "Actions",
-            description: "Capture a new account through the normal auth flow",
+            description: "Connect a new account through the provider login flow",
           },
           {
             title: "Reset exhausted accounts",
@@ -233,7 +342,7 @@ describe("tui plugin module", () => {
     })
   })
 
-  test("placeholder actions show a toast and keep dialog open", async () => {
+  test("connect action opens mode dialog", async () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
@@ -241,13 +350,319 @@ describe("tui plugin module", () => {
     const root = renderedDialogs[0]
     root.onSelect(root.options[0])
 
-    expect(toasts).toEqual([
+    expect(renderedDialogs[1]).toEqual({
+      title: "Connect Account",
+      placeholder: "Provider: openai",
+      options: [
+        {
+          title: "Connect account",
+          value: { kind: "mode", mode: "preserve" },
+          category: "Actions",
+          description: "Connect a new account, then restore the previously active account",
+        },
+        {
+          title: "Connect and activate",
+          value: { kind: "mode", mode: "activate" },
+          category: "Actions",
+          description: "Connect a new account and keep it active",
+        },
+        {
+          title: "Back",
+          value: { kind: "back" },
+          category: "Navigation",
+          description: "Return to the account list",
+        },
+      ],
+      skipFilter: true,
+      onSelect: expect.any(Function),
+    })
+  })
+
+  test("fake provider connect dialog shows code format hint", async () => {
+    const api = createApi({
+      providerAuthData: {
+        fake: [{ type: "oauth", label: "Fake OAuth" }],
+      },
+    })
+    await plugin.tui(api as any, { provider: "fake" } as any, {} as any)
+
+    registeredCommands!()[0].onSelect()
+    const root = renderedDialogs[0]
+    await root.onSelect(root.options[0])
+
+    expect(renderedDialogs[1]).toEqual({
+      title: "Connect Account",
+      placeholder: "Provider: fake | Fake codes: <label> or <label>:<usage> (usage = request limit)",
+      options: [
+        {
+          title: "Connect account",
+          value: { kind: "mode", mode: "preserve" },
+          category: "Actions",
+          description: "Connect fake code <label> or <label>:<usage>, then restore the previously active account",
+        },
+        {
+          title: "Connect and activate",
+          value: { kind: "mode", mode: "activate" },
+          category: "Actions",
+          description: "Connect fake code <label> or <label>:<usage> and keep the new account active",
+        },
+        {
+          title: "Back",
+          value: { kind: "back" },
+          category: "Navigation",
+          description: "Return to the account list",
+        },
+      ],
+      skipFilter: true,
+      onSelect: expect.any(Function),
+    })
+
+    const connect = renderedDialogs[1]
+    await connect.onSelect(connect.options[0])
+    expect(renderedDialogs[2]).toEqual({
+      title: "Connect Account",
+      placeholder: "Authorization code (alpha or alpha:2, where 2 is the request limit)",
+      onConfirm: expect.any(Function),
+      onCancel: expect.any(Function),
+    })
+  })
+
+  test("connect account restores the previously active account by default", async () => {
+    const personal: storage.OAuthAccount = {
+      id: "user_a",
+      label: "personal",
+      type: "oauth",
+      access: "access-a",
+      refresh: "refresh-a",
+      expires: Date.now() + 3600_000,
+      accountId: "acct_a",
+    }
+    const work: storage.OAuthAccount = {
+      id: "user_b",
+      label: "work",
+      type: "oauth",
+      access: "access-b",
+      refresh: "refresh-b",
+      expires: Date.now() + 3600_000,
+      accountId: "acct_b",
+    }
+    storage.add("openai", personal)
+    storage.activate("openai", 0)
+
+    const api = createApi({
+      callbackHandler: async () => {
+        writeOAuthAuth("openai", work)
+        storage.add("openai", work)
+      },
+    })
+    await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
+
+    registeredCommands!()[0].onSelect()
+    const root = renderedDialogs[0]
+    await root.onSelect(root.options[0])
+    const connect = renderedDialogs[1]
+    await connect.onSelect(connect.options[0])
+    const prompt = renderedDialogs[2]
+    await prompt.onConfirm("test-code")
+
+    expect(providerAuthCalls).toEqual([{}])
+    expect(providerAuthorizeCalls).toEqual([{ providerID: "openai", method: 0 }])
+    expect(providerCallbackCalls).toEqual([{ providerID: "openai", method: 0, code: "test-code" }])
+    expect(storage.read("openai")?.active).toBe(0)
+    expect(authSetCalls).toEqual([
       {
-        variant: "info",
-        message: "Add account is not implemented yet",
+        providerID: "openai",
+        auth: {
+          type: "oauth",
+          refresh: "refresh-a",
+          access: "access-a",
+          expires: expect.any(Number),
+          accountId: "acct_a",
+        },
       },
     ])
-    expect(renderedDialogs).toHaveLength(1)
+    expect(toasts).toContainEqual({
+      variant: "success",
+      message: "Connected account work",
+    })
+    expect(renderedDialogs[3]).toEqual({
+      title: "Provider Accounts",
+      placeholder: "Provider: openai | Accounts: 2",
+      options: [
+        {
+          title: "Connect account",
+          value: { kind: "action", action: "connect" },
+          category: "Actions",
+          description: "Connect a new account through the provider login flow",
+        },
+        {
+          title: "Reset exhausted accounts",
+          value: { kind: "action", action: "reset" },
+          category: "Actions",
+          description: "Clear exhausted markers for all stored accounts",
+        },
+        {
+          title: "personal",
+          value: { kind: "account", index: 0 },
+          category: "Accounts",
+          description: "id: user_a | accountId: acct_a",
+          footer: "active",
+        },
+        {
+          title: "work",
+          value: { kind: "account", index: 1 },
+          category: "Accounts",
+          description: "id: user_b | accountId: acct_b",
+          footer: "stored",
+        },
+      ],
+      skipFilter: true,
+      onSelect: expect.any(Function),
+    })
+  })
+
+  test("connect and activate keeps the newly connected account active", async () => {
+    const personal: storage.OAuthAccount = {
+      id: "user_a",
+      label: "personal",
+      type: "oauth",
+      access: "access-a",
+      refresh: "refresh-a",
+      expires: Date.now() + 3600_000,
+      accountId: "acct_a",
+    }
+    const work: storage.OAuthAccount = {
+      id: "user_b",
+      label: "work",
+      type: "oauth",
+      access: "access-b",
+      refresh: "refresh-b",
+      expires: Date.now() + 3600_000,
+      accountId: "acct_b",
+    }
+    storage.add("openai", personal)
+    storage.activate("openai", 0)
+
+    const api = createApi({
+      callbackHandler: async () => {
+        writeOAuthAuth("openai", work)
+        storage.add("openai", work)
+      },
+    })
+    await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
+
+    registeredCommands!()[0].onSelect()
+    const root = renderedDialogs[0]
+    await root.onSelect(root.options[0])
+    const connect = renderedDialogs[1]
+    await connect.onSelect(connect.options[1])
+    const prompt = renderedDialogs[2]
+    await prompt.onConfirm("test-code")
+
+    expect(storage.read("openai")?.active).toBe(1)
+    expect(authSetCalls).toEqual([])
+    expect(toasts).toContainEqual({
+      variant: "success",
+      message: "Connected and activated work",
+    })
+  })
+
+  test("connect account falls back to active new account when there was no previous account", async () => {
+    const work: storage.OAuthAccount = {
+      id: "user_b",
+      label: "work",
+      type: "oauth",
+      access: "access-b",
+      refresh: "refresh-b",
+      expires: Date.now() + 3600_000,
+      accountId: "acct_b",
+    }
+
+    const api = createApi({
+      callbackHandler: async () => {
+        writeOAuthAuth("openai", work)
+        storage.add("openai", work)
+      },
+    })
+    await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
+
+    registeredCommands!()[0].onSelect()
+    const root = renderedDialogs[0]
+    await root.onSelect(root.options[0])
+    const connect = renderedDialogs[1]
+    await connect.onSelect(connect.options[0])
+    const prompt = renderedDialogs[2]
+    await prompt.onConfirm("test-code")
+
+    expect(storage.read("openai")?.active).toBe(0)
+    expect(authSetCalls).toEqual([])
+    expect(toasts).toContainEqual({
+      variant: "success",
+      message: "Connected account work",
+    })
+  })
+
+  test("connect account supports auto OAuth mode", async () => {
+    const work: storage.OAuthAccount = {
+      id: "user_b",
+      label: "work",
+      type: "oauth",
+      access: "access-b",
+      refresh: "refresh-b",
+      expires: Date.now() + 3600_000,
+      accountId: "acct_b",
+    }
+
+    const api = createApi({
+      authorizeResult: {
+        data: {
+          method: "auto",
+          url: "https://example.com/connect",
+          instructions: "Open the browser login",
+        },
+      },
+      callbackHandler: async () => {
+        writeOAuthAuth("openai", work)
+        storage.add("openai", work)
+      },
+    })
+    await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
+
+    registeredCommands!()[0].onSelect()
+    const root = renderedDialogs[0]
+    await root.onSelect(root.options[0])
+    const connect = renderedDialogs[1]
+    await connect.onSelect(connect.options[1])
+    const alert = renderedDialogs[2]
+    alert.onConfirm()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(alert).toEqual({
+      title: "Connect Account",
+      message: "Open the browser login\nhttps://example.com/connect\n\nPress Enter after finishing login in your browser.",
+      onConfirm: expect.any(Function),
+    })
+    expect(storage.read("openai")?.active).toBe(0)
+    expect(toasts).toContainEqual({
+      variant: "success",
+      message: "Connected and activated work",
+    })
+  })
+
+  test("connect account shows an error when OAuth methods are unavailable", async () => {
+    const api = createApi({ providerMethods: [] })
+    await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
+
+    registeredCommands!()[0].onSelect()
+    const root = renderedDialogs[0]
+    await root.onSelect(root.options[0])
+    const connect = renderedDialogs[1]
+    await connect.onSelect(connect.options[0])
+
+    expect(toasts).toContainEqual({
+      variant: "error",
+      message: "No OAuth login method is available for openai",
+    })
   })
 
   test("reset action shows info toast when no exhausted accounts exist", async () => {
@@ -441,10 +856,10 @@ describe("tui plugin module", () => {
       placeholder: "Provider: openai | Accounts: 3",
       options: [
         {
-          title: "Add account",
-          value: { kind: "action", action: "add" },
+          title: "Connect account",
+          value: { kind: "action", action: "connect" },
           category: "Actions",
-          description: "Capture a new account through the normal auth flow",
+          description: "Connect a new account through the provider login flow",
         },
         {
           title: "Reset exhausted accounts",
@@ -544,10 +959,10 @@ describe("tui plugin module", () => {
       placeholder: "Provider: openai | Accounts: 1",
       options: [
         {
-          title: "Add account",
-          value: { kind: "action", action: "add" },
+          title: "Connect account",
+          value: { kind: "action", action: "connect" },
           category: "Actions",
-          description: "Capture a new account through the normal auth flow",
+          description: "Connect a new account through the provider login flow",
         },
         {
           title: "Reset exhausted accounts",
@@ -622,10 +1037,10 @@ describe("tui plugin module", () => {
       placeholder: "Provider: openai | Accounts: 2",
       options: [
         {
-          title: "Add account",
-          value: { kind: "action", action: "add" },
+          title: "Connect account",
+          value: { kind: "action", action: "connect" },
           category: "Actions",
-          description: "Capture a new account through the normal auth flow",
+          description: "Connect a new account through the provider login flow",
         },
         {
           title: "Reset exhausted accounts",
@@ -737,10 +1152,10 @@ describe("tui plugin module", () => {
       placeholder: "Provider: openai | Accounts: 1",
       options: [
         {
-          title: "Add account",
-          value: { kind: "action", action: "add" },
+          title: "Connect account",
+          value: { kind: "action", action: "connect" },
           category: "Actions",
-          description: "Capture a new account through the normal auth flow",
+          description: "Connect a new account through the provider login flow",
         },
         {
           title: "Reset exhausted accounts",
@@ -817,10 +1232,10 @@ describe("tui plugin module", () => {
       placeholder: "Provider: openai | Accounts: 1",
       options: [
         {
-          title: "Add account",
-          value: { kind: "action", action: "add" },
+          title: "Connect account",
+          value: { kind: "action", action: "connect" },
           category: "Actions",
-          description: "Capture a new account through the normal auth flow",
+          description: "Connect a new account through the provider login flow",
         },
         {
           title: "Reset exhausted accounts",
@@ -940,10 +1355,10 @@ describe("tui plugin module", () => {
       placeholder: "Provider: openai | Accounts: 0",
       options: [
         {
-          title: "Add account",
-          value: { kind: "action", action: "add" },
+          title: "Connect account",
+          value: { kind: "action", action: "connect" },
           category: "Actions",
-          description: "Capture a new account through the normal auth flow",
+          description: "Connect a new account through the provider login flow",
         },
         {
           title: "Reset exhausted accounts",
@@ -1010,10 +1425,10 @@ describe("tui plugin module", () => {
       placeholder: "Provider: openai | Accounts: 1",
       options: [
         {
-          title: "Add account",
-          value: { kind: "action", action: "add" },
+          title: "Connect account",
+          value: { kind: "action", action: "connect" },
           category: "Actions",
-          description: "Capture a new account through the normal auth flow",
+          description: "Connect a new account through the provider login flow",
         },
         {
           title: "Reset exhausted accounts",

@@ -15,7 +15,7 @@ Initial actions:
 - switch active account
 - reset exhausted state
 - disconnect stored account
-- add account through a guided dialog flow later
+- connect account through a guided dialog flow
 
 ## Decision
 
@@ -111,7 +111,7 @@ Dialog content:
 
 Top-level actions:
 
-- `Add account`
+- `Connect account`
 - `Reset exhausted accounts`
 
 Account rows:
@@ -293,15 +293,15 @@ Exit criteria:
 - inactive and active disconnect flows both work
 - auth sync only happens when needed
 
-### Iteration 6: guided add flow
+### Iteration 6: guided connect flow
 
 Objective:
 
-Add account capture from inside the dialog without implementing OAuth in this plugin.
+Connect account capture from inside the dialog without implementing OAuth in this plugin.
 
 Work:
 
-1. Add `Add account` action
+1. Add `Connect account` action
 2. Open a dialog flow that explains the login process
 3. Reuse existing auth/capture path from the server plugin
 4. Detect newly captured account and refresh the list

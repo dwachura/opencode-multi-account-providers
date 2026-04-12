@@ -16,6 +16,8 @@
  */
 import type { PluginModule } from "@opencode-ai/plugin"
 
+const FAKE_OAUTH_BASE_URL = process.env.FAKE_OAUTH_BASE_URL
+
 const plugin: PluginModule = {
   id: "fake-auth-plugin",
   server: async (input) => {
@@ -56,7 +58,49 @@ const plugin: PluginModule = {
             },
           }
         },
-        methods: [],
+        methods: [
+          {
+            type: "oauth",
+            label: "Fake OAuth",
+            authorize: async () => {
+              if (!FAKE_OAUTH_BASE_URL) {
+                throw new Error("FAKE_OAUTH_BASE_URL is required for fake OAuth")
+              }
+
+              return {
+                method: "code" as const,
+                url: `${FAKE_OAUTH_BASE_URL}/oauth/fake`,
+                instructions: "Enter a fake user id or label as the authorization code. Use <label>:<usage> to create a new fake user, where usage is the initial request limit.",
+                async callback(code: string) {
+                  const response = await fetch(`${FAKE_OAUTH_BASE_URL}/oauth/fake/callback`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ code }),
+                  })
+
+                  if (!response.ok) {
+                    return { type: "failed" as const }
+                  }
+
+                  const body = await response.json() as {
+                    access_token: string
+                    refresh_token: string
+                    expires_in: number
+                    account_id?: string
+                  }
+
+                  return {
+                    type: "success" as const,
+                    access: body.access_token,
+                    refresh: body.refresh_token,
+                    expires: Date.now() + body.expires_in * 1000,
+                    ...(body.account_id && { accountId: body.account_id }),
+                  }
+                },
+              }
+            },
+          },
+        ],
       },
     }
   },

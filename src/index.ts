@@ -126,8 +126,14 @@ function createAuthJsonWatcher(input: {
 
     try {
       watcher = watch(dir, { persistent: false }, (eventType, changedFile) => {
-        if (changedFile !== filename) return
         if (eventType !== "change" && eventType !== "rename") return
+        const rawChangedFile = changedFile as string | Uint8Array | null | undefined
+        const changedName = typeof rawChangedFile === "string"
+          ? rawChangedFile
+          : rawChangedFile != null
+            ? String(rawChangedFile)
+            : undefined
+        if (changedName && changedName !== filename) return
         scheduleScan(50)
       })
       retryLogged = false

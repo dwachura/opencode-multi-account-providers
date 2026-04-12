@@ -175,19 +175,7 @@ function writeAuthJson(authJsonPath: string, user: User) {
 function writeBootstrapAuthJson(authJsonPath: string) {
   writeFileSync(
     authJsonPath,
-    JSON.stringify(
-      {
-        [PROVIDER_ID]: {
-          type: "oauth",
-          access: "bootstrap",
-          refresh: "bootstrap",
-          expires: Date.now() + 3600_000,
-          accountId: "bootstrap",
-        },
-      },
-      null,
-      2,
-    ),
+    JSON.stringify({}, null, 2),
     { mode: 0o600 },
   )
 }
@@ -510,6 +498,7 @@ async function launchTui() {
       OPENCODE_CONFIG_DIR: configDir,
       OPENCODE_DISABLE_PROJECT_CONFIG: "1",
       OPENCODE_TEST_HOME: homeDir,
+      FAKE_OAUTH_BASE_URL: fakeBase,
       HOME: homeDir,
       XDG_DATA_HOME: join(envRoot, "data"),
       XDG_CONFIG_HOME: xdgConfigHome,

@@ -110,6 +110,8 @@ function getDb(): Database {
   if (db) return db
   mkdirSync(dataDir, { recursive: true })
   db = new Database(dbPath, { create: true })
+  db.exec("PRAGMA journal_mode = WAL;")
+  db.exec("PRAGMA busy_timeout = 5000;")
   db.exec(`
     CREATE TABLE IF NOT EXISTS accounts (
       provider TEXT NOT NULL,

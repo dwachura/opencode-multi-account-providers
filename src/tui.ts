@@ -7,7 +7,7 @@ const PROVIDER_ACCOUNTS_COMMAND = "provider-accounts"
 const PROVIDER_ACCOUNTS_DESCRIPTION = "Manage stored provider accounts"
 
 type RootDialogValue =
-  | { kind: "action"; action: "add" | "reset" }
+  | { kind: "action"; action: "connect" | "reset" }
   | { kind: "account"; index: number }
   | { kind: "empty" }
 
@@ -19,6 +19,16 @@ type ResetDialogValue =
   | { kind: "toggle"; index: number }
   | { kind: "action"; action: "apply" | "all" }
   | { kind: "back" }
+
+type ConnectDialogValue =
+  | { kind: "mode"; mode: "preserve" | "activate" }
+  | { kind: "back" }
+
+type ConnectedAccount = {
+  data: storage.ProviderData
+  index: number
+  account: storage.OAuthAccount
+}
 
 function providerSummary(provider: string, data: storage.ProviderData | undefined): string {
   return `Provider: ${provider} | Accounts: ${data?.accounts.length ?? 0}`
@@ -76,7 +86,204 @@ async function removeProviderAuth(api: TuiPluginApi, provider: string) {
   await api.client.auth.remove({ providerID: provider })
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function findAccountIndexByFingerprint(data: storage.ProviderData, fingerprint: string) {
+  return data.accounts.findIndex((account) => storage.fingerprint(account as storage.OAuthAccount) === fingerprint)
+}
+
+function matchesAuthEntry(account: storage.OAuthAccount, entry: storage.OAuthAuthEntry) {
+  return account.access === entry.access && account.refresh === entry.refresh
+}
+
+function findConnectedAccount(provider: string): ConnectedAccount | undefined {
+  const data = storage.read(provider)
+  const entry = storage.readAuthJson(provider)
+  if (!data || !entry) return undefined
+
+  const index = data.accounts.findIndex((account) => matchesAuthEntry(account as storage.OAuthAccount, entry))
+  if (index === -1) return undefined
+  return {
+    data,
+    index,
+    account: data.accounts[index] as storage.OAuthAccount,
+  }
+}
+
+async function waitForConnectedAccount(provider: string, timeoutMs = 5_000, intervalMs = 100) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const connected = findConnectedAccount(provider)
+    if (connected) return connected
+    await sleep(intervalMs)
+  }
+  return undefined
+}
+
 function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
+  const connectHint = provider === "fake"
+    ? "Fake codes: <label> or <label>:<usage> (usage = request limit)"
+    : undefined
+
+  const renderConnectActions = () => api.ui.DialogSelect({
+    title: "Connect Account",
+    placeholder: connectHint ? `Provider: ${provider} | ${connectHint}` : `Provider: ${provider}`,
+    options: [
+      {
+        title: "Connect account",
+        value: { kind: "mode", mode: "preserve" },
+        category: "Actions",
+        description: provider === "fake"
+          ? "Connect fake code <label> or <label>:<usage>, then restore the previously active account"
+          : "Connect a new account, then restore the previously active account",
+      },
+      {
+        title: "Connect and activate",
+        value: { kind: "mode", mode: "activate" },
+        category: "Actions",
+        description: provider === "fake"
+          ? "Connect fake code <label> or <label>:<usage> and keep the new account active"
+          : "Connect a new account and keep it active",
+      },
+      {
+        title: "Back",
+        value: { kind: "back" },
+        category: "Navigation",
+        description: "Return to the account list",
+      },
+    ] as TuiDialogSelectOption<ConnectDialogValue>[],
+    skipFilter: true,
+    async onSelect(option) {
+      const value = option.value
+      if (value.kind === "back") {
+        api.ui.dialog.replace(renderRoot)
+        return
+      }
+
+      const before = storage.read(provider)
+      const beforeSnapshot = before ? cloneProviderData(before) : undefined
+      const previousActive = beforeSnapshot?.accounts[beforeSnapshot.active] as storage.OAuthAccount | undefined
+      const previousFingerprint = previousActive ? storage.fingerprint(previousActive) : undefined
+
+      const methodsResult = await api.client.provider.auth({}) as any
+      const methods = (methodsResult.data?.[provider] ?? []) as Array<{ type: string, label: string, prompts?: unknown[] }>
+      const oauthIndex = methods.findIndex((method) => method.type === "oauth")
+      if (oauthIndex === -1) {
+        api.ui.toast({
+          variant: "error",
+          message: `No OAuth login method is available for ${provider}`,
+        })
+        return
+      }
+
+      const oauthMethod = methods[oauthIndex]
+      if (oauthMethod?.prompts && oauthMethod.prompts.length > 0) {
+        api.ui.toast({
+          variant: "error",
+          message: `Provider login prompts are not supported yet for ${provider}`,
+        })
+        return
+      }
+
+      const authorizeResult = await api.client.provider.oauth.authorize({
+        providerID: provider,
+        method: oauthIndex,
+      }) as any
+      if (authorizeResult.error || !authorizeResult.data) {
+        api.ui.toast({
+          variant: "error",
+          message: `Failed to start account connection for ${provider}`,
+        })
+        return
+      }
+
+      const completeConnect = async (code?: string) => {
+        const callbackResult = await api.client.provider.oauth.callback({
+          providerID: provider,
+          method: oauthIndex,
+          ...(code ? { code } : {}),
+        }) as any
+        if (callbackResult.error) {
+          api.ui.toast({
+            variant: "error",
+            message: `Failed to complete account connection for ${provider}`,
+          })
+          return
+        }
+
+        const connected = await waitForConnectedAccount(provider)
+        if (!connected) {
+          api.ui.toast({
+            variant: "error",
+            message: `Timed out waiting for ${provider} account capture`,
+          })
+          api.ui.dialog.replace(renderRoot)
+          return
+        }
+
+        if (value.mode === "preserve" && previousFingerprint) {
+          const previousIndex = findAccountIndexByFingerprint(connected.data, previousFingerprint)
+          if (previousIndex !== -1 && previousIndex !== connected.index) {
+            storage.activate(provider, previousIndex)
+            try {
+              await syncProviderAuth(api, provider, connected.data.accounts[previousIndex] as storage.OAuthAccount)
+            } catch {
+              storage.activate(provider, connected.index)
+              api.ui.toast({
+                variant: "error",
+                message: `Connected ${connected.account.label} but failed to restore the previous active account`,
+              })
+              api.ui.dialog.replace(renderRoot)
+              return
+            }
+          }
+
+          api.ui.toast({
+            variant: "success",
+            message: `Connected account ${connected.account.label}`,
+          })
+          api.ui.dialog.replace(renderRoot)
+          return
+        }
+
+        storage.activate(provider, connected.index)
+        api.ui.toast({
+          variant: "success",
+          message: value.mode === "activate"
+            ? `Connected and activated ${connected.account.label}`
+            : `Connected account ${connected.account.label}`,
+        })
+        api.ui.dialog.replace(renderRoot)
+      }
+
+      if (authorizeResult.data.method === "auto") {
+        api.ui.dialog.replace(() => api.ui.DialogAlert({
+          title: "Connect Account",
+          message: `${authorizeResult.data.instructions}\n${authorizeResult.data.url}\n\nPress Enter after finishing login in your browser.`,
+          async onConfirm() {
+            await completeConnect()
+          },
+        }))
+        return
+      }
+
+      api.ui.dialog.replace(() => api.ui.DialogPrompt({
+        title: "Connect Account",
+        placeholder: provider === "fake"
+          ? "Authorization code (alpha or alpha:2, where 2 is the request limit)"
+          : "Authorization code",
+        async onConfirm(code) {
+          await completeConnect(code)
+        },
+        onCancel() {
+          api.ui.dialog.replace(renderRoot)
+        },
+      }))
+    },
+  })
+
   const renderResetActions = (selected: number[] = []) => {
     const data = storage.read(provider)
     const exhausted = data?.exhausted.filter((index) => data.accounts[index]) ?? []
@@ -161,10 +368,10 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
     const data = storage.read(provider)
     const options: TuiDialogSelectOption<RootDialogValue>[] = [
       {
-        title: "Add account",
-        value: { kind: "action", action: "add" },
+        title: "Connect account",
+        value: { kind: "action", action: "connect" },
         category: "Actions",
-        description: "Capture a new account through the normal auth flow",
+        description: "Connect a new account through the provider login flow",
       },
       {
         title: "Reset exhausted accounts",
@@ -207,6 +414,11 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
         }
 
         if (value.kind === "action") {
+          if (value.action === "connect") {
+            api.ui.dialog.replace(renderConnectActions)
+            return
+          }
+
           if (value.action === "reset") {
             const exhausted = storage.read(provider)?.exhausted ?? []
             if (exhausted.length === 0) {
@@ -220,8 +432,6 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
             api.ui.dialog.replace(() => renderResetActions())
             return
           }
-
-          showNotImplementedToast(api, `${option.title} is not implemented yet`)
         }
       },
     })
@@ -366,8 +576,6 @@ const plugin: TuiPluginModule = {
     if (typeof opts.provider !== "string" || !opts.provider) {
       throw new Error(`${SERVICE}: "provider" option is required`)
     }
-
-    storage.configure(api.state.path.state)
 
     api.command.register(() => [
       {

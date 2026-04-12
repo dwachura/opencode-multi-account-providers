@@ -82,6 +82,12 @@ export function getById(id: string): User | null {
   return db.prepare("SELECT * FROM users WHERE id = ?").get(id) as User | null
 }
 
+export function resolveOAuthCode(code: string): User | null {
+  return db.prepare(
+    "SELECT * FROM users WHERE id = ? OR name = ? OR account_id = ? OR access_token = ? LIMIT 1",
+  ).get(code, code, code, code) as User | null
+}
+
 export function listAll(): User[] {
   return db.prepare("SELECT * FROM users").all() as User[]
 }

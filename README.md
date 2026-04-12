@@ -76,7 +76,7 @@ Current dialog actions:
 - reset selected exhausted accounts or all exhausted accounts
 - disconnect a stored account
 
-`Add account` is not implemented in the dialog yet. Keep using `opencode auth login <provider>` to add new accounts.
+`Connect account` is available in the dialog. You can either keep the previously active account active or activate the newly connected account.
 
 ## Limitations
 
@@ -90,4 +90,4 @@ Current dialog actions:
 - user-facing TUI plan and iteration notes: `specs/plans/provider-accounts-command.md`
 - current architecture and design notes: `specs/architecture.md`
 - development, testing, and local harness docs: `specs/development.md`
-- backlog and future ideas: `specs/plans/backlog.md`
+- backlog and future ideas: `specs/backlog.md`

@@ -81,6 +81,7 @@ beforeAll(async () => {
   // Start opencode server
   process.env.XDG_DATA_HOME = join(TEST_ENV, "data")
   process.env.OPENCODE_CONFIG_DIR = CONFIG_DIR
+  process.env.FAKE_OAUTH_BASE_URL = fakeBase
 
   // Point the storage module at the test data dir so test helpers
   // share the same SQLite database the plugin will use
@@ -102,6 +103,7 @@ afterAll(() => {
   fakeServer?.stop(true)
   delete process.env.XDG_DATA_HOME
   delete process.env.OPENCODE_CONFIG_DIR
+  delete process.env.FAKE_OAUTH_BASE_URL
 })
 
 beforeEach(async () => {
@@ -109,6 +111,13 @@ beforeEach(async () => {
   await setServerLimits("user-a", 100)
   await setServerLimits("user-b", 100)
   await setServerLimits("user-c", 100)
+
+  const expires = Date.now() + 3600_000
+  await setServerTokens("user-a", "access-a", "refresh-a", expires)
+  await setServerTokens("user-b", "access-b", "refresh-b", expires)
+  await setServerTokens("user-c", "access-c", "refresh-c", expires)
+  writeOAuthAuth("access-a", "refresh-a", expires, "acct_alice")
+  storage.write(PROVIDER_ID, { active: 0, accounts: [], exhausted: [] })
 })
 
 // ── Helpers ──
@@ -187,6 +196,105 @@ describe("environment", () => {
   test("fake LLM server is reachable", async () => {
     const res = await fetch(`${fakeBase}/v1/models`)
     expect(res.status).toBe(200)
+  })
+})
+
+describe("fake provider oauth", () => {
+  test("advertises an oauth auth method", async () => {
+    const result = await client.provider.auth({})
+
+    expect(result.data?.[PROVIDER_ID]).toEqual([
+      {
+        type: "oauth",
+        label: "Fake OAuth",
+      },
+    ])
+  })
+
+  test("oauth authorize + callback writes fake user credentials", async () => {
+    const expires = Date.now() + 3600_000
+    await setServerTokens("user-b", "oauth-b-access", "oauth-b-refresh", expires)
+
+    const authorize = await client.provider.oauth.authorize({
+      providerID: PROVIDER_ID,
+      method: 0,
+    })
+    expect(authorize.data).toEqual({
+      method: "code",
+      url: `${fakeBase}/oauth/fake`,
+      instructions: "Enter a fake user id or label as the authorization code. Use <label>:<usage> to create a new fake user, where usage is the initial request limit.",
+    })
+
+    const callback = await client.provider.oauth.callback({
+      providerID: PROVIDER_ID,
+      method: 0,
+      code: "user-b",
+    })
+    expect(callback.data).toBe(true)
+
+    const entry = readAuthJsonEntry()
+    expect(entry).toEqual({
+      type: "oauth",
+      access: "oauth-b-access",
+      refresh: "oauth-b-refresh",
+      expires: expect.any(Number),
+      accountId: "acct_bob",
+    })
+    expect((entry?.expires as number) >= Date.now()).toBe(true)
+  })
+
+  test("oauth callback can provision a new fake user from code", async () => {
+    const authorize = await client.provider.oauth.authorize({
+      providerID: PROVIDER_ID,
+      method: 0,
+    })
+    expect(authorize.data?.method).toBe("code")
+
+    const callback = await client.provider.oauth.callback({
+      providerID: PROVIDER_ID,
+      method: 0,
+      code: "alpha",
+    })
+    expect(callback.data).toBe(true)
+
+    const entry = readAuthJsonEntry()
+    expect(entry).toEqual({
+      type: "oauth",
+      access: "alpha",
+      refresh: "alpha",
+      expires: expect.any(Number),
+      accountId: "alpha",
+    })
+
+    const user = await getServerUser("alpha")
+    expect(user.id).toBe("alpha")
+    expect(user.access_token).toBe("alpha")
+    expect(user.refresh_token).toBe("alpha")
+    expect(user.account_id).toBe("alpha")
+  })
+
+  test("oauth callback can provision a new fake user with a request limit from code", async () => {
+    const callback = await client.provider.oauth.callback({
+      providerID: PROVIDER_ID,
+      method: 0,
+      code: "beta:2",
+    })
+    expect(callback.data).toBe(true)
+
+    const entry = readAuthJsonEntry()
+    expect(entry).toEqual({
+      type: "oauth",
+      access: "beta",
+      refresh: "beta",
+      expires: expect.any(Number),
+      accountId: "beta",
+    })
+
+    const user = await getServerUser("beta")
+    expect(user.id).toBe("beta")
+    expect(user.req_limit).toBe(2)
+    expect(user.access_token).toBe("beta")
+    expect(user.refresh_token).toBe("beta")
   })
 })
 
@@ -298,21 +406,17 @@ describe("single account passthrough", () => {
 })
 
 describe("auth.json file watcher", () => {
-  test("captures an existing auth.json entry before the first prompt", async () => {
+  test("captures the initial auth.json entry on first prompt cold start", async () => {
     storage.write(PROVIDER_ID, { active: 0, accounts: [], exhausted: [] })
 
-    const expires = Date.now() + 3600_000
-    await setServerTokens("user-c", "startup-token", "startup-refresh", expires)
-
-    writeOAuthAuth("startup-token", "startup-refresh", expires, "acct_startup")
-
-    await waitFor(() => readMultiAuth()?.accounts.length === 1)
+    const session = await client.session.create()
+    await sendPrompt(session.data!.id, "cold start capture")
 
     const data = readMultiAuth()!
     expect(data.accounts).toHaveLength(1)
     const account = data.accounts[0] as storage.OAuthAccount
-    expect(account.access).toBe("startup-token")
-    expect(account.id).toBe("startup-token")
+    expect(account.access).toBe("access-a")
+    expect(account.id).toBe("access-a")
   })
 
   test("captures a new account when auth.json is rewritten", async () => {
@@ -327,6 +431,11 @@ describe("auth.json file watcher", () => {
 
     // Wait for the watcher to debounce + fire (50ms debounce + filesystem latency)
     await new Promise((r) => setTimeout(r, 300))
+
+    await waitFor(() => {
+      const data = readMultiAuth()
+      return data?.accounts.length === 1 && (data.accounts[0] as storage.OAuthAccount | undefined)?.access === "watcher-token-1"
+    })
 
     const data = readMultiAuth()
     expect(data).toBeDefined()
@@ -346,6 +455,11 @@ describe("auth.json file watcher", () => {
     // Second write with the same access token should dedupe by id
     writeOAuthAuth("dup-token", "dup-refresh", expires, "acct_dup")
     await new Promise((r) => setTimeout(r, 200))
+
+    await waitFor(() => {
+      const data = readMultiAuth()
+      return data?.accounts.length === 1 && (data.accounts[0] as storage.OAuthAccount | undefined)?.access === "dup-token"
+    })
 
     const data = readMultiAuth()
     expect(data!.accounts).toHaveLength(1)

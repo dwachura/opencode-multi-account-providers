@@ -96,7 +96,7 @@ Reason:
 Current dialog structure:
 
 - root dialog
-  - `Add account` placeholder
+  - `Connect account`
   - `Reset exhausted accounts`
   - account rows
 - account dialog
@@ -153,4 +153,4 @@ Accounts are deduplicated by a stable fingerprint derived from provider identity
 
 - TUI command plan: `specs/plans/provider-accounts-command.md`
 - development/testing notes: `specs/development.md`
-- backlog: `specs/plans/backlog.md`
+- backlog: `specs/backlog.md`

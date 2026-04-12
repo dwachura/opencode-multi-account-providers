@@ -32,6 +32,7 @@ function authenticate(req: Request): db.User | Response {
   // Try API key first, then access token
   const user = db.getByApiKey(token) ?? db.getByAccessToken(token)
   if (!user) {
+    console.log(`[fake-server] invalid_credentials token=${token}`)
     return Response.json(
       { error: { message: "Invalid credentials", type: "auth", code: "invalid_api_key" } },
       { status: 401 },
@@ -337,6 +338,62 @@ function handleTokenRefresh(body: any): Response {
   })
 }
 
+function handleFakeOauthPage(): Response {
+  return new Response(
+    [
+      "Fake OAuth test endpoint",
+      "",
+      "Use a fake user id or label as the authorization code.",
+      "You can also create a new fake user with <label>:<usage>, where usage is the initial request limit.",
+      "Examples: user-a, user-b, alpha, beta, alpha:2",
+    ].join("\n"),
+    { headers: { "Content-Type": "text/plain; charset=utf-8" } },
+  )
+}
+
+function parseFakeOauthCode(raw: string) {
+  const match = raw.match(/^([a-zA-Z0-9._-]+)(?::(\d+))?$/)
+  if (!match) return
+  const label = match[1]
+  const usage = match[2] === undefined ? undefined : Number(match[2])
+  if (!label) return
+  if (usage !== undefined && !Number.isFinite(usage)) return
+  return { label, usage }
+}
+
+function handleFakeOauthCallback(body: any): Response {
+  const code = typeof body.code === "string" ? body.code.trim() : ""
+  if (!code) {
+    return Response.json({ error: "code required" }, { status: 400 })
+  }
+
+  const parsed = parseFakeOauthCode(code)
+  if (!parsed) {
+    return Response.json({ error: "invalid_code" }, { status: 404 })
+  }
+
+  const user = db.resolveOAuthCode(parsed.label) ?? db.createUser({
+    id: parsed.label,
+    name: parsed.label,
+    access_token: parsed.label,
+    refresh_token: parsed.label,
+    account_id: parsed.label,
+    ...(parsed.usage !== undefined ? { req_limit: parsed.usage } : {}),
+  })
+  if (!user.access_token || !user.refresh_token) {
+    return Response.json({ error: "invalid_code" }, { status: 404 })
+  }
+
+  const expiresIn = Math.max(Math.floor((user.token_expires - Date.now()) / 1000), 1)
+  return Response.json({
+    access_token: user.access_token,
+    refresh_token: user.refresh_token,
+    token_type: "bearer",
+    expires_in: expiresIn,
+    account_id: user.account_id,
+  })
+}
+
 // ── Admin API ──
 
 function handleAdminGetUsers(): Response {
@@ -427,6 +484,13 @@ export function start(port = 18080, options?: { seed?: boolean }) {
       }
 
       // OAuth token endpoint
+      if (method === "GET" && path === "/oauth/fake") {
+        return handleFakeOauthPage()
+      }
+      if (method === "POST" && path === "/oauth/fake/callback") {
+        const body = await req.json()
+        return handleFakeOauthCallback(body)
+      }
       if (method === "POST" && path === "/oauth/token") {
         const body = await req.json()
         return handleTokenRefresh(body)
@@ -470,6 +534,8 @@ export function start(port = 18080, options?: { seed?: boolean }) {
   console.log(`Fake LLM server listening on http://localhost:${server.port}`)
   console.log(`  POST /v1/responses   — OpenAI Responses API`)
   console.log(`  GET  /v1/models      — Model listing`)
+  console.log(`  GET  /oauth/fake     — Fake OAuth instructions`)
+  console.log(`  POST /oauth/fake/callback — Fake OAuth code exchange`)
   console.log(`  POST /oauth/token    — OAuth token refresh`)
   console.log(`  GET  /admin/users    — List all users`)
   console.log(`  POST /admin/users    — Create user`)
