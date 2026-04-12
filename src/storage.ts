@@ -25,6 +25,41 @@ export type ProviderData = {
   exhausted: number[]
 }
 
+export type AccountSelector = number | string
+
+export type ResolveResult =
+  | {
+      status: "match"
+      index: number
+      account: OAuthAccount
+      by: "index" | "label" | "id" | "accountId"
+    }
+  | {
+      status: "ambiguous"
+      matches: number[]
+    }
+  | {
+      status: "not_found"
+    }
+
+export type RemoveResult =
+  | {
+      status: "removed"
+      removedIndex: number
+      removed: OAuthAccount
+      removedWasActive: boolean
+      remainingCount: number
+      nextActiveIndex?: number
+      nextActive?: OAuthAccount
+    }
+  | {
+      status: "ambiguous"
+      matches: number[]
+    }
+  | {
+      status: "not_found"
+    }
+
 export type OAuthAuthEntry = {
   type: "oauth"
   refresh: string
@@ -231,6 +266,89 @@ export function add(provider: string, account: OAuthAccount): number {
   return data.active
 }
 
+export function resolve(provider: string, selector: AccountSelector): ResolveResult {
+  const data = read(provider)
+  if (!data) return { status: "not_found" }
+
+  if (typeof selector === "number") {
+    const account = data.accounts[selector] as OAuthAccount | undefined
+    if (!account) return { status: "not_found" }
+    return { status: "match", index: selector, account, by: "index" }
+  }
+
+  const trimmed = selector.trim()
+  if (!trimmed) return { status: "not_found" }
+
+  if (/^\d+$/.test(trimmed)) {
+    const index = Number.parseInt(trimmed, 10)
+    const account = data.accounts[index] as OAuthAccount | undefined
+    if (account) return { status: "match", index, account, by: "index" }
+  }
+
+  const matches = new Map<number, ResolveResult & { status: "match" }>()
+  data.accounts.forEach((account, index) => {
+    const oauth = account as OAuthAccount
+    if (oauth.label === trimmed) {
+      matches.set(index, { status: "match", index, account: oauth, by: "label" })
+      return
+    }
+    if (oauth.id === trimmed) {
+      matches.set(index, { status: "match", index, account: oauth, by: "id" })
+      return
+    }
+    if (oauth.accountId === trimmed) {
+      matches.set(index, { status: "match", index, account: oauth, by: "accountId" })
+    }
+  })
+
+  if (matches.size === 0) return { status: "not_found" }
+  if (matches.size > 1) return { status: "ambiguous", matches: [...matches.keys()] }
+  return [...matches.values()][0]
+}
+
+export function remove(provider: string, selector: AccountSelector): RemoveResult {
+  const resolved = resolve(provider, selector)
+  if (resolved.status !== "match") return resolved
+
+  const data = read(provider)
+  if (!data) return { status: "not_found" }
+
+  const removedIndex = resolved.index
+  const removedWasActive = data.active === removedIndex
+  const removed = data.accounts[removedIndex] as OAuthAccount
+  const accounts = data.accounts.filter((_, index) => index !== removedIndex)
+  const exhausted = data.exhausted
+    .filter((index) => index !== removedIndex)
+    .map((index) => (index > removedIndex ? index - 1 : index))
+
+  if (accounts.length === 0) {
+    write(provider, { active: 0, accounts, exhausted })
+    return {
+      status: "removed",
+      removedIndex,
+      removed,
+      removedWasActive,
+      remainingCount: 0,
+    }
+  }
+
+  const nextActiveIndex = removedIndex < data.active
+    ? data.active - 1
+    : Math.min(data.active, accounts.length - 1)
+  const nextActive = accounts[nextActiveIndex] as OAuthAccount
+  write(provider, { active: nextActiveIndex, accounts, exhausted })
+
+  return {
+    status: "removed",
+    removedIndex,
+    removed,
+    removedWasActive,
+    remainingCount: accounts.length,
+    nextActiveIndex,
+    nextActive,
+  }
+}
+
 export function activate(provider: string, index: number): void {
   const data = read(provider)
   if (!data) return
@@ -247,10 +365,17 @@ export function exhaust(provider: string, index: number): void {
   }
 }
 
-export function reset(provider: string): void {
+export function reset(provider: string, indices?: number[]): void {
   const data = read(provider)
   if (!data) return
-  data.exhausted = []
+  if (!indices || indices.length === 0) {
+    data.exhausted = []
+    write(provider, data)
+    return
+  }
+
+  const selected = new Set(indices)
+  data.exhausted = data.exhausted.filter((index) => !selected.has(index))
   write(provider, data)
 }
 

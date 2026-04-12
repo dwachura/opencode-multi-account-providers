@@ -12,7 +12,8 @@
     "e2e:reset": "bun script/e2e.ts reset"
   },
   "exports": {
-    "./server": "./src/index.ts"
+    "./server": "./src/index.ts",
+    "./tui": "./src/tui.ts"
   },
   "engines": {
     "opencode": ">=1.3.0"

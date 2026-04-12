@@ -109,6 +109,11 @@ function defaultEnvRoot() {
 }
 
 function writeConfig(configDir: string, fakeBase: string) {
+  const plugin = [
+    [AUTH_PLUGIN_DIR, {}],
+    [PROJECT_ROOT, { provider: PROVIDER_ID }],
+  ]
+
   const config = {
     $schema: "https://opencode.ai/config.json",
     provider: {
@@ -126,10 +131,7 @@ function writeConfig(configDir: string, fakeBase: string) {
         },
       },
     },
-    plugin: [
-      [AUTH_PLUGIN_DIR, {}],
-      [PROJECT_ROOT, { provider: PROVIDER_ID }],
-    ],
+    plugin,
     agent: {
       title: {
         disable: true,
@@ -137,8 +139,14 @@ function writeConfig(configDir: string, fakeBase: string) {
     },
   }
 
+  const tuiConfig = {
+    $schema: "https://opencode.ai/tui.json",
+    plugin,
+  }
+
   mkdirSync(configDir, { recursive: true })
   writeFileSync(join(configDir, "opencode.json"), JSON.stringify(config, null, 2))
+  writeFileSync(join(configDir, "tui.json"), JSON.stringify(tuiConfig, null, 2))
 }
 
 function writeAuthJson(authJsonPath: string, user: User) {
