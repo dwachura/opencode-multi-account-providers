@@ -1,6 +1,6 @@
 # opencode-multi-account-providers
 
-An [OpenCode](https://opencode.ai) plugin that manages multiple OAuth accounts for one provider and automatically rotates to another account when the current one hits a rate limit.
+An [OpenCode](https://opencode.ai) plugin that manages multiple OAuth accounts across compatible providers and automatically rotates to another account when the current one hits a rate limit.
 
 If you keep multiple ChatGPT subscriptions for the same provider, the plugin can retry with another stored account instead of leaving the session stuck on a rate-limited one.
 
@@ -21,7 +21,7 @@ When you add the plugin manually, configure it in both `opencode.json` and `tui.
 ```json
 {
   "plugin": [
-    ["opencode-multi-account-providers", { "provider": "openai" }]
+    ["opencode-multi-account-providers", {}]
   ]
 }
 ```
@@ -31,20 +31,14 @@ When you add the plugin manually, configure it in both `opencode.json` and `tui.
 ```json
 {
   "plugin": [
-    ["opencode-multi-account-providers", { "provider": "openai" }]
+    ["opencode-multi-account-providers", {}]
   ]
 }
 ```
 
 For local path-based development, replace the package name with the local repository path in both files.
 
-### Option
-
-| Option | Type | Description |
-|---|---|---|
-| `provider` | `string` | Provider ID managed by this plugin instance. |
-
-To manage multiple providers, add the plugin more than once with different `provider` values.
+Plugin options are currently ignored. Load the plugin once.
 
 ## Setup
 
@@ -66,10 +60,11 @@ Once multiple accounts are stored, the plugin will automatically rotate after a 
 
 ### TUI account management
 
-In the TUI, run `/provider-accounts` to open the local account dialog.
+In the TUI, run `/provider-accounts` to open the local provider picker and account dialog.
 
 Current dialog actions:
 
+- pick a provider with OAuth support or stored accounts
 - inspect stored accounts
 - see which account is `active` or `exhausted`
 - set the active account manually
@@ -80,10 +75,10 @@ Current dialog actions:
 
 ## Limitations
 
-- one provider per plugin instance
 - best support is currently `openai`
 - depends on a compatible provider auth plugin that re-reads auth for each request
 - the account-capture watcher is best-effort
+- picker only shows providers with OAuth support or already stored accounts
 
 ## Docs
 

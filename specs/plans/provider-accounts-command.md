@@ -104,7 +104,8 @@ Dialog title:
 
 Dialog content:
 
-- configured provider name
+- provider picker first
+- then selected provider name
 - account count
 - selectable top-level actions
 - selectable account rows
@@ -136,6 +137,10 @@ On success:
 
 - refresh the dialog contents
 - show a toast
+
+Current implementation note:
+
+- picker only shows providers with an OAuth auth method or already stored accounts
 
 On failure:
 

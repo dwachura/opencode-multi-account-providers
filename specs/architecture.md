@@ -40,6 +40,7 @@ Server responsibilities:
 TUI responsibilities:
 
 - register local `/provider-accounts`
+- render a provider picker
 - render dialog-based account management
 - show account state (`active`, `exhausted`)
 - switch active account
@@ -95,7 +96,10 @@ Reason:
 
 Current dialog structure:
 
-- root dialog
+- provider picker
+  - providers with OAuth support
+  - providers with stored accounts
+- provider dialog
   - `Connect account`
   - `Reset exhausted accounts`
   - account rows
@@ -133,6 +137,8 @@ Each provider stores:
 - ordered accounts
 - active index
 - exhausted indices
+
+The plugin is loaded once globally and routes capture, rotation, and TUI actions by runtime provider ID.
 
 Accounts are deduplicated by a stable fingerprint derived from provider identity data. OpenAI has a dedicated identity extractor. Other providers may fall back to weaker identity matching.
 
