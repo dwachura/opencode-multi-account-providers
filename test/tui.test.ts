@@ -113,11 +113,36 @@ function createApi(options: {
       }),
       dialog: {
         replace: mock((render: () => unknown) => {
-          renderedDialogs.push(render())
+          const value = render()
+          if (value && typeof (value as Promise<unknown>).then === "function") {
+            void (value as Promise<unknown>).then((resolved) => {
+              renderedDialogs.push(resolved)
+            })
+            return
+          }
+          renderedDialogs.push(value)
         }),
       },
     },
   }
+}
+
+async function openProviderPicker() {
+  await registeredCommands!()[0].onSelect()
+  for (let i = 0; i < 10 && renderedDialogs.length === 0; i++) {
+    await Promise.resolve()
+  }
+  return renderedDialogs[0]
+}
+
+async function openProviderAccounts(provider = "openai") {
+  const picker = await openProviderPicker()
+  const option = picker.options.find((entry: any) => entry.value.kind === "provider" && entry.value.provider === provider)
+  await picker.onSelect(option)
+  await Promise.resolve()
+  const root = renderedDialogs[1]
+  renderedDialogs = [root]
+  return root
 }
 
 describe("tui plugin module", () => {
@@ -150,11 +175,26 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    const command = registeredCommands!()[0]
-    command.onSelect()
+    const picker = await openProviderPicker()
+    await picker.onSelect(picker.options[0])
 
-    expect(api.ui.dialog.replace).toHaveBeenCalledTimes(1)
+    expect(api.ui.dialog.replace).toHaveBeenCalledTimes(2)
     expect(renderedDialogs).toEqual([
+      {
+        title: "Provider Accounts",
+        placeholder: "Providers: 1",
+        options: [
+          {
+            title: "openai",
+            value: { kind: "provider", provider: "openai" },
+            category: "Providers",
+            description: "Accounts: 0 | OAuth available",
+            footer: undefined,
+          },
+        ],
+        skipFilter: true,
+        onSelect: expect.any(Function),
+      },
       {
         title: "Provider Accounts",
         placeholder: "Provider: openai | Accounts: 0",
@@ -185,6 +225,45 @@ describe("tui plugin module", () => {
     ])
   })
 
+  test("picker filters out providers without oauth unless accounts are already stored", async () => {
+    storage.add("gitlab", {
+      id: "user_gitlab",
+      label: "gitlab-user",
+      type: "oauth",
+      access: "access-gitlab",
+      refresh: "refresh-gitlab",
+      expires: Date.now() + 3600_000,
+    })
+
+    const api = createApi({
+      providerAuthData: {
+        openai: [{ type: "oauth", label: "Browser login" }],
+        "github-copilot": [{ type: "api", label: "API key" }],
+        poe: [{ type: "api", label: "API key" }],
+      },
+    })
+    await plugin.tui(api as any, {}, {} as any)
+
+    const picker = await openProviderPicker()
+
+    expect(picker.options).toEqual([
+      {
+        title: "gitlab",
+        value: { kind: "provider", provider: "gitlab" },
+        category: "Providers",
+        description: "Accounts: 1 | Stored accounts only",
+        footer: "Provider: gitlab | Accounts: 1",
+      },
+      {
+        title: "openai",
+        value: { kind: "provider", provider: "openai" },
+        category: "Providers",
+        description: "Accounts: 0 | OAuth available",
+        footer: undefined,
+      },
+    ])
+  })
+
   test("uses shared configured storage instead of api.state.path.state", async () => {
     const wrongPath = mkdtempSync(join(tmpdir(), "multi-account-plugin-tui-wrong-state-"))
     storage.add("openai", {
@@ -200,9 +279,10 @@ describe("tui plugin module", () => {
     const api = createApi({ statePath: wrongPath })
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
+    const picker = await openProviderPicker()
+    await picker.onSelect(picker.options[0])
 
-    expect(renderedDialogs[0]).toEqual({
+    expect(renderedDialogs[1]).toEqual({
       title: "Provider Accounts",
       placeholder: "Provider: openai | Accounts: 1",
       options: [
@@ -256,9 +336,25 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
+    const picker = await openProviderPicker()
+    await picker.onSelect(picker.options[0])
 
     expect(renderedDialogs).toEqual([
+      {
+        title: "Provider Accounts",
+        placeholder: "Providers: 1",
+        options: [
+          {
+            title: "openai",
+            value: { kind: "provider", provider: "openai" },
+            category: "Providers",
+            description: "Accounts: 2 | OAuth available",
+            footer: "Provider: openai | Accounts: 2",
+          },
+        ],
+        skipFilter: true,
+        onSelect: expect.any(Function),
+      },
       {
         title: "Provider Accounts",
         placeholder: "Provider: openai | Accounts: 2",
@@ -310,8 +406,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     root.onSelect(root.options[2])
 
     expect(renderedDialogs[1]).toEqual({
@@ -346,8 +441,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     root.onSelect(root.options[0])
 
     expect(renderedDialogs[1]).toEqual({
@@ -386,8 +480,7 @@ describe("tui plugin module", () => {
     })
     await plugin.tui(api as any, { provider: "fake" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts("fake")
     await root.onSelect(root.options[0])
 
     expect(renderedDialogs[1]).toEqual({
@@ -457,15 +550,14 @@ describe("tui plugin module", () => {
     })
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[0])
     const connect = renderedDialogs[1]
     await connect.onSelect(connect.options[0])
     const prompt = renderedDialogs[2]
     await prompt.onConfirm("test-code")
 
-    expect(providerAuthCalls).toEqual([{}])
+    expect(providerAuthCalls).toEqual([{}, {}])
     expect(providerAuthorizeCalls).toEqual([{ providerID: "openai", method: 0 }])
     expect(providerCallbackCalls).toEqual([{ providerID: "openai", method: 0, code: "test-code" }])
     expect(storage.read("openai")?.active).toBe(0)
@@ -551,8 +643,7 @@ describe("tui plugin module", () => {
     })
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[0])
     const connect = renderedDialogs[1]
     await connect.onSelect(connect.options[1])
@@ -586,8 +677,7 @@ describe("tui plugin module", () => {
     })
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[0])
     const connect = renderedDialogs[1]
     await connect.onSelect(connect.options[0])
@@ -628,8 +718,7 @@ describe("tui plugin module", () => {
     })
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[0])
     const connect = renderedDialogs[1]
     await connect.onSelect(connect.options[1])
@@ -650,11 +739,20 @@ describe("tui plugin module", () => {
   })
 
   test("connect account shows an error when OAuth methods are unavailable", async () => {
+    storage.add("openai", {
+      id: "user_a",
+      label: "personal",
+      type: "oauth",
+      access: "access-a",
+      refresh: "refresh-a",
+      expires: Date.now() + 3600_000,
+      accountId: "acct_a",
+    })
+
     const api = createApi({ providerMethods: [] })
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[0])
     const connect = renderedDialogs[1]
     await connect.onSelect(connect.options[0])
@@ -679,8 +777,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     root.onSelect(root.options[1])
 
     expect(toasts).toContainEqual({
@@ -725,8 +822,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     root.onSelect(root.options[1])
 
     expect(renderedDialogs[1]).toEqual({
@@ -806,8 +902,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     root.onSelect(root.options[1])
     const reset = renderedDialogs[1]
     reset.onSelect(reset.options[3])
@@ -920,8 +1015,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     root.onSelect(root.options[1])
     const reset = renderedDialogs[1]
     reset.onSelect(reset.options[1])
@@ -948,8 +1042,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     root.onSelect(root.options[2])
     const nested = renderedDialogs[1]
     nested.onSelect(nested.options[2])
@@ -1008,8 +1101,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[3])
     const nested = renderedDialogs[1]
     await nested.onSelect(nested.options[0])
@@ -1092,8 +1184,7 @@ describe("tui plugin module", () => {
     const api = createApi({ authSetError: new Error("boom") })
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[3])
     const nested = renderedDialogs[1]
     await nested.onSelect(nested.options[0])
@@ -1131,8 +1222,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[3])
     storage.write("openai", {
       active: 0,
@@ -1200,8 +1290,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[2])
     const nested = renderedDialogs[1]
     await nested.onSelect(nested.options[1])
@@ -1281,8 +1370,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[2])
     const nested = renderedDialogs[1]
     await nested.onSelect(nested.options[1])
@@ -1337,8 +1425,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[2])
     const nested = renderedDialogs[1]
     await nested.onSelect(nested.options[1])
@@ -1403,8 +1490,7 @@ describe("tui plugin module", () => {
     const api = createApi()
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[3])
     storage.write("openai", {
       active: 0,
@@ -1473,8 +1559,7 @@ describe("tui plugin module", () => {
     const api = createApi({ authSetError: new Error("boom") })
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[2])
     const nested = renderedDialogs[1]
     await nested.onSelect(nested.options[1])
@@ -1526,8 +1611,7 @@ describe("tui plugin module", () => {
     const api = createApi({ authRemoveError: new Error("boom") })
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
-    registeredCommands!()[0].onSelect()
-    const root = renderedDialogs[0]
+    const root = await openProviderAccounts()
     await root.onSelect(root.options[2])
     const nested = renderedDialogs[1]
     await nested.onSelect(nested.options[1])
@@ -1556,7 +1640,9 @@ describe("tui plugin module", () => {
     expect(renderedDialogs).toHaveLength(2)
   })
 
-  test("throws when provider option is missing", async () => {
-    await expect(plugin.tui(createApi() as any, undefined, {} as any)).rejects.toThrow(/provider/)
+  test("ignores plugin options", async () => {
+    await expect(plugin.tui(createApi() as any, undefined, {} as any)).resolves.toBeUndefined()
+    await expect(plugin.tui(createApi() as any, {}, {} as any)).resolves.toBeUndefined()
+    await expect(plugin.tui(createApi() as any, { provider: "openai" }, {} as any)).resolves.toBeUndefined()
   })
 })

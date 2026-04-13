@@ -24,6 +24,10 @@ type ConnectDialogValue =
   | { kind: "mode"; mode: "preserve" | "activate" }
   | { kind: "back" }
 
+type ProviderDialogValue =
+  | { kind: "provider"; provider: string }
+  | { kind: "empty" }
+
 type ConnectedAccount = {
   data: storage.ProviderData
   index: number
@@ -32,6 +36,12 @@ type ConnectedAccount = {
 
 function providerSummary(provider: string, data: storage.ProviderData | undefined): string {
   return `Provider: ${provider} | Accounts: ${data?.accounts.length ?? 0}`
+}
+
+function providerPickerDescription(provider: string, data: storage.ProviderData | undefined, hasOAuth: boolean): string {
+  const details = [`Accounts: ${data?.accounts.length ?? 0}`]
+  details.push(hasOAuth ? "OAuth available" : "Stored accounts only")
+  return details.join(" | ")
 }
 
 function accountDescription(account: storage.OAuthAccount): string {
@@ -122,7 +132,27 @@ async function waitForConnectedAccount(provider: string, timeoutMs = 5_000, inte
   return undefined
 }
 
-function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
+async function listAvailableProviders(api: TuiPluginApi) {
+  const methodsResult = await api.client.provider.auth({}) as any
+  const providerAuthData = (methodsResult.data ?? {}) as Record<string, Array<{ type: string, label: string, prompts?: unknown[] }>>
+  const storedProviders = storage.listProviders()
+  const providerIDs = new Set([...Object.keys(providerAuthData), ...storedProviders])
+  return [...providerIDs]
+    .sort((a, b) => a.localeCompare(b))
+    .map((provider) => {
+      const data = storage.read(provider)
+      const methods = providerAuthData[provider] ?? []
+      const hasOAuth = methods.some((method) => method.type === "oauth")
+      return {
+        provider,
+        data,
+        hasOAuth,
+      }
+    })
+    .filter(({ data, hasOAuth }) => hasOAuth || !!data)
+}
+
+function showProviderAccountsDialog(api: TuiPluginApi, provider: string, goBack: () => void) {
   const connectHint = provider === "fake"
     ? "Fake codes: <label> or <label>:<usage> (usage = request limit)"
     : undefined
@@ -158,7 +188,7 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
     async onSelect(option) {
       const value = option.value
       if (value.kind === "back") {
-        api.ui.dialog.replace(renderRoot)
+        goBack()
         return
       }
 
@@ -219,7 +249,7 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
             variant: "error",
             message: `Timed out waiting for ${provider} account capture`,
           })
-          api.ui.dialog.replace(renderRoot)
+          api.ui.dialog.replace(() => renderRoot())
           return
         }
 
@@ -235,7 +265,7 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
                 variant: "error",
                 message: `Connected ${connected.account.label} but failed to restore the previous active account`,
               })
-              api.ui.dialog.replace(renderRoot)
+              api.ui.dialog.replace(() => renderRoot())
               return
             }
           }
@@ -244,7 +274,7 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
             variant: "success",
             message: `Connected account ${connected.account.label}`,
           })
-          api.ui.dialog.replace(renderRoot)
+          api.ui.dialog.replace(() => renderRoot())
           return
         }
 
@@ -255,7 +285,7 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
             ? `Connected and activated ${connected.account.label}`
             : `Connected account ${connected.account.label}`,
         })
-        api.ui.dialog.replace(renderRoot)
+        api.ui.dialog.replace(() => renderRoot())
       }
 
       if (authorizeResult.data.method === "auto") {
@@ -278,7 +308,7 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
           await completeConnect(code)
         },
         onCancel() {
-          api.ui.dialog.replace(renderRoot)
+          api.ui.dialog.replace(() => renderRoot())
         },
       }))
     },
@@ -327,7 +357,7 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
       onSelect(option) {
         const value = option.value
         if (value.kind === "back") {
-          api.ui.dialog.replace(renderRoot)
+          api.ui.dialog.replace(() => renderRoot())
           return
         }
 
@@ -350,7 +380,7 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
             variant: "success",
             message: `Reset ${current.length} exhausted account${current.length === 1 ? "" : "s"}`,
           })
-          api.ui.dialog.replace(renderRoot)
+          api.ui.dialog.replace(() => renderRoot())
           return
         }
 
@@ -359,7 +389,7 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
           variant: "success",
           message: "Reset all exhausted accounts",
         })
-        api.ui.dialog.replace(renderRoot)
+        api.ui.dialog.replace(() => renderRoot())
       },
     })
   }
@@ -474,24 +504,24 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
       placeholder: `${accountDescription(account)} | ${accountFooter(data, index)}`,
       options,
       skipFilter: true,
-      async onSelect(option) {
-        const value = option.value
-        if (value.kind === "back") {
-          api.ui.dialog.replace(renderRoot)
-          return
-        }
+        async onSelect(option) {
+          const value = option.value
+          if (value.kind === "back") {
+          api.ui.dialog.replace(() => renderRoot())
+            return
+          }
 
         if (value.action === "switch") {
           const current = storage.read(provider)
           const next = current?.accounts[index]
           if (!current || !next || storage.fingerprint(next as storage.OAuthAccount) !== storage.fingerprint(account)) {
-            api.ui.toast({
-              variant: "warning",
-              message: "That account no longer exists",
-            })
-            api.ui.dialog.replace(renderRoot)
-            return
-          }
+              api.ui.toast({
+                variant: "warning",
+                message: "That account no longer exists",
+              })
+            api.ui.dialog.replace(() => renderRoot())
+              return
+            }
 
           const previousActive = current.active
           storage.activate(provider, index)
@@ -511,7 +541,7 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
             variant: "success",
             message: `Active account set to ${next.label}`,
           })
-          api.ui.dialog.replace(renderRoot)
+          api.ui.dialog.replace(() => renderRoot())
           return
         }
 
@@ -519,13 +549,13 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
           const current = storage.read(provider)
           const next = current?.accounts[index]
           if (!current || !next || storage.fingerprint(next as storage.OAuthAccount) !== storage.fingerprint(account)) {
-            api.ui.toast({
-              variant: "warning",
-              message: "That account no longer exists",
-            })
-            api.ui.dialog.replace(renderRoot)
-            return
-          }
+              api.ui.toast({
+                variant: "warning",
+                message: "That account no longer exists",
+              })
+            api.ui.dialog.replace(() => renderRoot())
+              return
+            }
 
           const snapshot = cloneProviderData(current)
           const result = storage.remove(provider, index)
@@ -534,7 +564,7 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
               variant: "warning",
               message: "That account no longer exists",
             })
-            api.ui.dialog.replace(renderRoot)
+            api.ui.dialog.replace(() => renderRoot())
             return
           }
 
@@ -557,7 +587,7 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
             variant: "success",
             message: `Removed account ${result.removed.label}`,
           })
-          api.ui.dialog.replace(renderRoot)
+          api.ui.dialog.replace(() => renderRoot())
           return
         }
 
@@ -569,14 +599,41 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string) {
   api.ui.dialog.replace(renderRoot)
 }
 
+async function showProviderPickerDialog(api: TuiPluginApi) {
+  const providers = await listAvailableProviders(api)
+  const options: TuiDialogSelectOption<ProviderDialogValue>[] = providers.length === 0
+    ? [{
+        title: "No providers available",
+        value: { kind: "empty" },
+        category: "Providers",
+        description: "No OAuth providers or stored accounts were found",
+      }]
+    : providers.map(({ provider, data, hasOAuth }) => ({
+        title: provider,
+        value: { kind: "provider", provider },
+        category: "Providers",
+        description: providerPickerDescription(provider, data, hasOAuth),
+        footer: data?.accounts.length ? providerSummary(provider, data) : undefined,
+      }))
+
+  api.ui.dialog.replace(() => api.ui.DialogSelect({
+    title: "Provider Accounts",
+    placeholder: providers.length === 0 ? "No providers available" : `Providers: ${providers.length}`,
+    options,
+    skipFilter: true,
+    onSelect(option) {
+      const value = option.value
+      if (value.kind !== "provider") return
+      showProviderAccountsDialog(api, value.provider, () => {
+        void showProviderPickerDialog(api)
+      })
+    },
+  }))
+}
+
 const plugin: TuiPluginModule = {
   id: PLUGIN_ID,
-  tui: async (api, options) => {
-    const opts = (options ?? {}) as Record<string, unknown>
-    if (typeof opts.provider !== "string" || !opts.provider) {
-      throw new Error(`${SERVICE}: "provider" option is required`)
-    }
-
+  tui: async (api) => {
     api.command.register(() => [
       {
         title: "Provider Accounts",
@@ -584,7 +641,7 @@ const plugin: TuiPluginModule = {
         description: PROVIDER_ACCOUNTS_DESCRIPTION,
         slash: { name: PROVIDER_ACCOUNTS_COMMAND },
         onSelect() {
-          showProviderAccountsDialog(api, opts.provider as string)
+          showProviderPickerDialog(api)
         },
       },
     ])

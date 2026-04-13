@@ -47,7 +47,7 @@ function usage() {
   console.log(`Usage:
   bun run e2e:tui
   bun run e2e:account:list
-  bun run e2e:account:add <label> [initialReqLimit]
+  bun run e2e:account:add [label] [initialReqLimit]
   bun run e2e:account:remove <label|index>
   bun run e2e:limit <label> <reqLimit> [tokLimit]
   bun run e2e:reset
@@ -111,7 +111,7 @@ function defaultEnvRoot() {
 function writeConfig(configDir: string, fakeBase: string) {
   const plugin = [
     [AUTH_PLUGIN_DIR, {}],
-    [PROJECT_ROOT, { provider: PROVIDER_ID }],
+    [PROJECT_ROOT, {}],
   ]
 
   const config = {
@@ -205,6 +205,10 @@ function normalizeLabel(input: string): string {
     throw new Error("Label must match [a-zA-Z0-9._-]+")
   }
   return label
+}
+
+function defaultLabel() {
+  return `acct-${Date.now().toString(36)}`
 }
 
 async function createUser(state: State, label: string, initialReqLimit?: number): Promise<User> {
@@ -528,7 +532,12 @@ async function main() {
       return
     case "add":
     case "account:add":
-      if (!args[0]) throw new Error("Missing label")
+      if (!args[0]) {
+        const generated = defaultLabel()
+        console.log(`No label provided, using ${generated}`)
+        await addAccount(generated)
+        return
+      }
       await addAccount(args[0], args[1])
       return
     case "remove":
