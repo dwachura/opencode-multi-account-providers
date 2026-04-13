@@ -99,6 +99,13 @@ describe("read/write", () => {
     storage.write("openai", { active: 0, accounts: [oauthA], exhausted: [] })
     expect(storage.read("openai")?.accounts).toHaveLength(1)
   })
+
+  test("listProviders returns distinct stored providers", () => {
+    storage.write("openai", { active: 0, accounts: [oauthA], exhausted: [] })
+    storage.write("fake", { active: 0, accounts: [oauthB], exhausted: [] })
+
+    expect(storage.listProviders()).toEqual(["fake", "openai"])
+  })
 })
 
 // ── add ──
@@ -517,5 +524,19 @@ describe("readAuthJson", () => {
     const entry = storage.readAuthJson("openai")
     expect(entry).toHaveProperty("accountId", "acct_1")
     expect(entry).toHaveProperty("enterpriseUrl", "https://ent.example.com")
+  })
+
+  test("readAllAuthJson returns all valid oauth entries", () => {
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      openai: { type: "oauth", refresh: "r1", access: "a1", expires: 1 },
+      fake: { type: "oauth", refresh: "r2", access: "a2", expires: 2, accountId: "acct_2" },
+      anthropic: { type: "api", key: "sk-ant-123" },
+      invalid: { type: "oauth", refresh: "r3", access: "a3" },
+    }))
+
+    expect(storage.readAllAuthJson()).toEqual({
+      openai: { type: "oauth", refresh: "r1", access: "a1", expires: 1 },
+      fake: { type: "oauth", refresh: "r2", access: "a2", expires: 2, accountId: "acct_2" },
+    })
   })
 })

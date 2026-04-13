@@ -228,6 +228,13 @@ export function read(provider: string): ProviderData | undefined {
   }
 }
 
+export function listProviders(): string[] {
+  const rows = getDb()
+    .prepare("SELECT DISTINCT provider FROM accounts ORDER BY provider")
+    .all() as Array<{ provider: string }>
+  return rows.map((row) => row.provider)
+}
+
 export function write(provider: string, data: ProviderData): void {
   const d = getDb()
   const tx = d.transaction((value: ProviderData) => {
@@ -402,4 +409,19 @@ export function readAuthJson(provider: string): OAuthAuthEntry | undefined {
     return undefined
   }
   return entry as OAuthAuthEntry
+}
+
+export function readAllAuthJson(): Record<string, OAuthAuthEntry> {
+  const all = readAuthJsonAll()
+  const result: Record<string, OAuthAuthEntry> = {}
+  for (const [provider, entry] of Object.entries(all)) {
+    if (!entry || typeof entry !== "object") continue
+    const e = entry as Record<string, unknown>
+    if (e.type !== "oauth") continue
+    if (typeof e.refresh !== "string" || typeof e.access !== "string" || typeof e.expires !== "number") {
+      continue
+    }
+    result[provider] = entry as OAuthAuthEntry
+  }
+  return result
 }
