@@ -60,7 +60,7 @@ beforeAll(async () => {
     },
     plugin: [
       [AUTH_PLUGIN_DIR, {}],
-      [PROJECT_ROOT, { provider: PROVIDER_ID }],
+      [PROJECT_ROOT, {}],
     ],
   }
 
