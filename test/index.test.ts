@@ -122,8 +122,10 @@ describe("plugin module", () => {
     expect(hooks.event).toBeDefined()
   })
 
-  test("server throws when provider option is missing", async () => {
-    await expect(plugin.server!({ client: mockClient } as any, undefined)).rejects.toThrow(/provider/)
+  test("server ignores plugin options", async () => {
+    await expect(plugin.server!({ client: mockClient } as any, undefined)).resolves.toBeDefined()
+    await expect(plugin.server!({ client: mockClient } as any, {})).resolves.toBeDefined()
+    await expect(plugin.server!({ client: mockClient } as any, { provider: "openai" })).resolves.toBeDefined()
   })
 })
 
@@ -252,7 +254,7 @@ describe("chat.params — auto-detection", () => {
     expect(storage.read("openai")).toBeUndefined()
   })
 
-  test("ignores unmanaged providers", async () => {
+  test("captures runtime provider even without explicit config", async () => {
     writeFileSync(
       join(testDir, "auth.json"),
       JSON.stringify({
@@ -268,7 +270,7 @@ describe("chat.params — auto-detection", () => {
     const hooks = await createHooks("openai")
     await runChatParams(hooks, "s1", "anthropic")
 
-    expect(storage.read("anthropic")).toBeUndefined()
+    expect(storage.read("anthropic")?.accounts).toHaveLength(1)
   })
 
 })
@@ -503,7 +505,7 @@ describe("event — rate limit detection", () => {
     expect(rotation.consume("s13")).toBe(false)
   })
 
-  test("ignores unmanaged providers", async () => {
+  test("handles tracked providers globally", async () => {
     storage.add("anthropic", oauthA)
     storage.activate("anthropic", 0)
 
@@ -512,7 +514,7 @@ describe("event — rate limit detection", () => {
     rotation.trackAccount("s14", 0)
 
     await hooks.event!(retryEvent("s14", "Rate Limited"))
-    expect(rotation.consume("s14")).toBe(false)
+    expect(rotation.consume("s14")).toBe(true)
   })
 
   test("does not exhaust wrong account after rotation", async () => {

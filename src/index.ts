@@ -165,13 +165,6 @@ function createAuthJsonWatcher(input: {
 const plugin: PluginModule = {
   id: PLUGIN_ID,
   server: async (input, options) => {
-    const opts = (options ?? {}) as Record<string, unknown>
-    if (typeof opts.provider !== "string" || !opts.provider) {
-      throw new Error(`${SERVICE}: "provider" option is required`)
-    }
-    const managedProvider: string = opts.provider
-
-    const extractor = identity.get(managedProvider)
     const pluginLogPath = storage.getLogPath()
 
     const log = (
@@ -190,7 +183,6 @@ const plugin: PluginModule = {
             service: SERVICE,
             level,
             message,
-            provider: managedProvider,
             ...extra,
           })}\n`,
           "utf8",
@@ -212,29 +204,31 @@ const plugin: PluginModule = {
         body: { variant, message, ...(title && { title }) },
       })
 
-    const detectAccount = (origin: "watcher" | "chat"): void => {
-      const entry = storage.readAuthJson(managedProvider)
+    const detectAccount = (providerID: string, origin: "watcher" | "chat"): void => {
+      const entry = storage.readAuthJson(providerID)
       if (!entry) {
         writeFileLog("debug", "detectAccount skipped: auth entry missing", {
+          provider: providerID,
           origin,
         })
         return
       }
-      const account = toOAuthAccount(managedProvider, entry, extractor)
+      const extractor = identity.get(providerID)
+      const account = toOAuthAccount(providerID, entry, extractor)
       if (!account) {
         void debugLog("warn", "could not derive account identity from access token; skipping", {
-          provider: managedProvider,
+          provider: providerID,
           origin,
         })
         return
       }
-      const beforeCount = storage.read(managedProvider)?.accounts.length ?? 0
-      const idx = storage.add(managedProvider, account)
-      const afterCount = storage.read(managedProvider)?.accounts.length ?? 0
+      const beforeCount = storage.read(providerID)?.accounts.length ?? 0
+      const idx = storage.add(providerID, account)
+      const afterCount = storage.read(providerID)?.accounts.length ?? 0
       const isNew = afterCount > beforeCount
 
       void debugLog("info", isNew ? "captured new account" : "captured existing account", {
-        provider: managedProvider,
+        provider: providerID,
         origin,
         index: idx,
         total: afterCount,
@@ -249,7 +243,7 @@ const plugin: PluginModule = {
       // detection (first chat after plugin start).
       if (origin === "watcher") {
         if (isNew) {
-          toast("success", `Captured new account for ${managedProvider}: ${account.label}`, PLUGIN_ID)
+          toast("success", `Captured new account for ${providerID}: ${account.label}`, PLUGIN_ID)
         } else {
           toast("info", `Refreshing credentials for the account ${account.label}`, PLUGIN_ID)
         }
@@ -259,26 +253,30 @@ const plugin: PluginModule = {
     // Start the file watcher. Captures every login to auth.json (including
     // additional accounts) without depending on plugin auth-hook composition.
     const authJsonPath = storage.getAuthJsonPath()
-    const watcherKey = `${authJsonPath}:${managedProvider}`
+    const watcherKey = authJsonPath
     watcherControllers.get(watcherKey)?.stop()
     watcherControllers.set(
       watcherKey,
       createAuthJsonWatcher({
         authJsonPath,
         watcherKey,
-        onChange: () => detectAccount("watcher"),
+        onChange: () => {
+          const entries = storage.readAllAuthJson()
+          for (const providerID of Object.keys(entries)) {
+            detectAccount(providerID, "watcher")
+          }
+        },
         log: (level, message, extra) => {
-          void log(level, message, { provider: managedProvider, watcherKey, ...extra })
+          void log(level, message, { watcherKey, ...extra })
         },
       }),
     )
 
-    void debugLog("info", "initialized", { provider: managedProvider, logPath: pluginLogPath })
+    void debugLog("info", "initialized", { logPath: pluginLogPath })
 
     return {
       "chat.params": async (hookInput) => {
         const providerID = hookInput.model.providerID
-        if (providerID !== managedProvider) return
 
         const sessionID = hookInput.sessionID
         rotation.track(sessionID, providerID)
@@ -362,7 +360,7 @@ const plugin: PluginModule = {
         } else {
           // Cold-start fallback: when auth.json existed before the plugin
           // started, no change event ever fires for it. Detect on first chat.
-          detectAccount("chat")
+          detectAccount(providerID, "chat")
           const data = storage.read(providerID)
           if (data) {
             rotation.trackAccount(sessionID, data.active)
@@ -387,7 +385,6 @@ const plugin: PluginModule = {
           const matchesRateLimit = isRateLimitMessage(status.message)
           await debugLog("info", "retry event observed", {
             sessionID,
-            managedProvider,
             trackedProvider: providerID,
             trackedAccountIndex: accountIdx,
             retryMessage: status.message,
@@ -396,16 +393,14 @@ const plugin: PluginModule = {
           if (!matchesRateLimit) {
             await debugLog("debug", "retry event ignored: message did not match rate-limit predicate", {
               sessionID,
-              managedProvider,
               trackedProvider: providerID,
               retryMessage: status.message,
             })
             return
           }
-          if (providerID !== managedProvider) {
+          if (!providerID) {
             await debugLog("debug", "retry event ignored: session not tracked for managed provider", {
               sessionID,
-              managedProvider,
               trackedProvider: providerID,
             })
             return
