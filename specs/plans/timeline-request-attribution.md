@@ -8,6 +8,12 @@ Replace session-level `lastAccount` guesswork with timeline correlation:
 - request history per session
 - retry exhaustion resolved from the account active when that request started
 
+The implementation should follow the current repo shape:
+
+- server bookkeeping is global across providers, not tied to one configured provider
+- TUI account management is provider-picker based
+- durable account identity should come from extracted auth identity, not mutable storage index
+
 This should handle both:
 
 - providers that use rotated credentials immediately
@@ -54,6 +60,7 @@ Suggested fields:
 type AuthActivation = {
   providerID: string
   index: number
+  accountID: string
   fingerprint: string
   seq: number
   at: number
@@ -68,6 +75,13 @@ type RequestRecord = {
   kind?: "normal" | "retry"
 }
 ```
+
+Notes:
+
+- `accountID` should come from the provider identity extractor result
+- for providers with JWT-backed identity, this should prefer a stable user id such as `sub`
+- `fingerprint` remains the durable lookup key for storage correlation
+- `index` is a snapshot/debug field only; do not rely on it as the primary join key
 
 ### 1.2 Sequence allocator
 
@@ -103,11 +117,15 @@ Add:
 Record activation everywhere effective auth/account selection changes:
 
 - server rotation path in `src/index.ts`
+- server capture path when a newly captured account becomes active
 - TUI `Set active`
 - TUI `Connect account`
 - TUI `Connect and activate`
 - TUI disconnect flows that switch auth
-- optionally capture paths when a newly captured account becomes active
+
+Implementation note for current code:
+
+- TUI hooks should be added inside the per-provider dialog flow reached from the provider picker, not in a single-provider command path
 
 ### 2.3 Scope guard
 
@@ -136,8 +154,10 @@ At minimum:
 
 ### 3.3 Existing provider mapping
 
-Keep `track(sessionID, providerID)` only if still useful.
-Otherwise fold provider lookup into request history usage.
+Current code no longer has a single managed provider at request time.
+
+- fold provider lookup into request history usage
+- remove session-level provider tracking once the resolver no longer needs it
 
 ### Exit
 
@@ -153,7 +173,8 @@ Implement resolver:
 - input: `sessionID`
 - find latest relevant request record for the session
 - find latest auth activation for that provider where `activation.seq <= request.seq`
-- return the attributed account index
+- resolve current account from activation fingerprint / account identity
+- return the attributed account index only after durable identity maps back to current storage
 
 ### 4.2 Fallback behavior
 
@@ -161,6 +182,12 @@ If no matching activation exists:
 
 - fall back conservatively
 - log fallback reason
+
+If a historical activation resolves to an account that no longer exists in storage:
+
+- skip exhaustion
+- log that attribution could not be mapped safely
+- do not fall back to current active index or last-known index
 
 ### 4.3 Unit tests
 
@@ -187,7 +214,7 @@ Log:
 
 - request seq/at
 - matched activation seq/at
-- resolved provider/index/label
+- resolved provider/fingerprint/accountID/index/label
 - fallback reason if used
 
 ### 5.3 Cleanup
@@ -196,6 +223,7 @@ Remove or deprecate:
 
 - `trackAccount`
 - `usedAccount`
+- `track(sessionID, providerID)` if request history fully replaces provider lookup
 
 ### Exit
 
@@ -218,6 +246,11 @@ Add integration coverage for the fake provider:
 If practical, simulate a provider path where a retry still belongs to the old account after auth rotation.
 
 If not practical, cover this with unit tests against synthetic timelines.
+
+Add one more synthetic case:
+
+- request resolves to a historical fingerprint that was later removed from storage
+- retry attribution should skip exhaustion rather than exhaust the wrong current account
 
 ### 6.3 Existing suite
 
@@ -274,9 +307,14 @@ Update architecture docs to explain:
 - trim history aggressively; this is runtime bookkeeping, not audit storage
 - keep the timeline in memory first
 - do not persist it to SQLite unless a later need appears
+- use auth-derived account identity as the durable timeline identity
+- treat storage index as mutable and unsuitable for long-lived attribution
+- record activations only after the effective auth switch succeeds
+- current server path is provider-agnostic, so request history should be the source of provider attribution too
 
 ## Success Criteria
 
 - after rotation to `beta`, if the retry actually used `beta`, the next rate-limit exhausts `beta`
 - if a provider still used `alpha`, `alpha` is exhausted instead
+- if the attributed historical account was removed before the retry event is handled, the plugin skips exhaustion and logs why
 - no fake-only hardcoded logic is required for correct attribution
