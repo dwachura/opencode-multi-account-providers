@@ -66,6 +66,23 @@ Suggested manual flow:
 4. Test switch/reset/disconnect flows
 5. Send prompts to verify automatic rotation still works
 
+### Current blocker
+
+`bun run e2e:tui` is currently not reliable enough for end-to-end verification.
+
+Findings so far:
+
+- the TUI runtime only started loading external TUI plugins after writing `tui.json` into the XDG config path, not just the local config dir
+- the fake auth plugin also needed a no-op `tui` entrypoint; without it, TUI plugin loading logged an error before the real plugin loaded
+- helper commands that mutate the fake environment cannot rely on rewriting `auth.json` alone; live OpenCode auth state and watcher reconciliation can diverge
+- helper commands also cannot assume a fixed local OpenCode port; stale or not-yet-ready local servers caused false failures and reconciliation timeouts
+- even after fixing config-path and startup-port issues, the interactive harness still reproduced cases where fake-provider requests hit the fake server with invalid credentials
+
+Current implication:
+
+- use unit tests plus `test/integration/integration.test.ts` as the source of truth for now
+- treat `e2e:tui` as an unfinished debugging harness, not a passing verification path
+
 ## Fake Server Admin API
 
 The fake server used by tests and the interactive harness exposes:
@@ -84,3 +101,6 @@ The fake server used by tests and the interactive harness exposes:
 - `.test-env/` is intentionally isolated from your normal OpenCode state
 - the interactive harness writes both `opencode.json` and `tui.json`
 - if you keep a long-running interactive harness open while testing other flows, be mindful that it also runs its own OpenCode process against test data
+- when debugging `e2e:tui`, inspect both:
+  - `.test-env/interactive/<run>/data/opencode/log/`
+  - `.test-env/interactive/<run>/fake-server.log`

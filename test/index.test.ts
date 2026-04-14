@@ -16,6 +16,7 @@ let mockClient: any
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "multi-account-plugin-test-"))
   storage.configure(testDir)
+  rotation.reset()
   authSetCalls = []
   toastCalls = []
   mockClient = {
@@ -37,8 +38,8 @@ beforeEach(() => {
 
 // ── Helpers ──
 
-async function createHooks(provider: string) {
-  return plugin.server!({ client: mockClient } as any, { provider })
+async function createHooks(provider: string, options?: Record<string, unknown>) {
+  return plugin.server!({ client: mockClient } as any, { provider, ...options })
 }
 
 async function waitFor(check: () => boolean, timeoutMs = 1500) {
@@ -146,8 +147,8 @@ describe("chat.params — auto-detection", () => {
       }),
     )
 
-    const hooks = await createHooks("openai")
-    await runChatParams(hooks, "s1", "openai")
+    await createHooks("openai")
+    await waitFor(() => storage.read("openai")?.accounts.length === 1)
 
     const data = storage.read("openai")
     expect(data!.accounts).toHaveLength(1)
@@ -156,7 +157,7 @@ describe("chat.params — auto-detection", () => {
     expect(account.label).toBe("alice@example.com")
   })
 
-  test("falls back to JWT sub and email claims when ChatGPT claims missing", async () => {
+  test("refuses to add account when ChatGPT account id claim is missing", async () => {
     const jwt = makeOpenAiJwt({ sub: "auth0|xyz", email: "bob@example.com" })
     writeFileSync(
       join(testDir, "auth.json"),
@@ -170,12 +171,10 @@ describe("chat.params — auto-detection", () => {
       }),
     )
 
-    const hooks = await createHooks("openai")
-    await runChatParams(hooks, "s1", "openai")
+    await createHooks("openai")
+    await new Promise((resolve) => setTimeout(resolve, 50))
 
-    const account = storage.read("openai")!.accounts[0] as storage.OAuthAccount
-    expect(account.id).toBe("auth0|xyz")
-    expect(account.label).toBe("bob@example.com")
+    expect(storage.read("openai")).toBeUndefined()
   })
 
   test("uses provider id as label when no email claim is present", async () => {
@@ -192,8 +191,8 @@ describe("chat.params — auto-detection", () => {
       }),
     )
 
-    const hooks = await createHooks("openai")
-    await runChatParams(hooks, "s1", "openai")
+    await createHooks("openai")
+    await waitFor(() => storage.read("openai")?.accounts.length === 1)
 
     const account = storage.read("openai")!.accounts[0] as storage.OAuthAccount
     expect(account.label).toBe("openai")
@@ -213,8 +212,8 @@ describe("chat.params — auto-detection", () => {
       }),
     )
 
-    const hooks = await createHooks("openai")
-    await runChatParams(hooks, "s1", "openai")
+    await createHooks("openai")
+    await new Promise((resolve) => setTimeout(resolve, 50))
 
     expect(storage.read("openai")).toBeUndefined()
   })
@@ -233,8 +232,8 @@ describe("chat.params — auto-detection", () => {
       }),
     )
 
-    const hooks = await createHooks("openai")
-    await runChatParams(hooks, "s1", "openai")
+    await createHooks("openai")
+    await new Promise((resolve) => setTimeout(resolve, 50))
 
     expect(storage.read("openai")).toBeUndefined()
   })
@@ -247,8 +246,8 @@ describe("chat.params — auto-detection", () => {
       }),
     )
 
-    const hooks = await createHooks("openai")
-    await runChatParams(hooks, "s1", "openai")
+    await createHooks("openai")
+    await new Promise((resolve) => setTimeout(resolve, 50))
 
     // Should not store API key accounts
     expect(storage.read("openai")).toBeUndefined()
@@ -267,8 +266,8 @@ describe("chat.params — auto-detection", () => {
       }),
     )
 
-    const hooks = await createHooks("openai")
-    await runChatParams(hooks, "s1", "anthropic")
+    await createHooks("openai", { enableDefaultExtractor: true })
+    await waitFor(() => storage.read("anthropic")?.accounts.length === 1)
 
     expect(storage.read("anthropic")?.accounts).toHaveLength(1)
   })
@@ -305,8 +304,8 @@ describe("auth.json watcher", () => {
   })
 
   test("multiple plugin instances can watch the same auth.json", async () => {
-    await createHooks("openai")
-    await createHooks("fake")
+    await createHooks("openai", { enableDefaultExtractor: true })
+    await createHooks("fake", { enableDefaultExtractor: true })
     await new Promise((resolve) => setTimeout(resolve, 50))
 
     const jwt = makeOpenAiJwt({ chatgptId: "user_multi", openaiEmail: "multi@example.com" })
@@ -337,7 +336,7 @@ describe("auth.json watcher", () => {
     expect((storage.read("openai")!.accounts[0] as storage.OAuthAccount).id).toBe("user_multi")
     const fakeAccount = storage.read("fake")!.accounts[0] as storage.OAuthAccount
     expect(fakeAccount.id).toBe("fake-access-token")
-    expect(fakeAccount.label).toBe("fake-access-token")
+    expect(fakeAccount.label).toBe("fake")
   })
 
   test("watcher retries until auth directory exists", async () => {
@@ -380,7 +379,6 @@ describe("chat.params — rotation", () => {
 
     const hooks = await createHooks("openai")
 
-    rotation.track("s1", "openai")
     rotation.flag("s1")
 
     await runChatParams(hooks, "s1", "openai")
@@ -389,7 +387,7 @@ describe("chat.params — rotation", () => {
     expect(authSetCalls[0].path.id).toBe("openai")
     expect(authSetCalls[0].body.type).toBe("oauth")
     expect(authSetCalls[0].body.refresh).toBe("refresh-b")
-    expect(storage.read("openai")!.active).toBe(1)
+    expect(storage.read("openai")!.active).toBe(0)
   })
 
   test("no-op when all accounts exhausted", async () => {
@@ -399,7 +397,6 @@ describe("chat.params — rotation", () => {
     storage.exhaust("openai", 1)
 
     const hooks = await createHooks("openai")
-    rotation.track("s3", "openai")
     rotation.flag("s3")
 
     await runChatParams(hooks, "s3", "openai")
@@ -417,7 +414,6 @@ describe("chat.params — rotation", () => {
     storage.activate("openai", 0)
 
     const hooks = await createHooks("openai")
-    rotation.track("s4", "openai")
     rotation.flag("s4")
 
     await runChatParams(hooks, "s4", "openai")
@@ -446,10 +442,10 @@ describe("event — rate limit detection", () => {
     storage.add("openai", oauthA)
     storage.add("openai", oauthB)
     storage.activate("openai", 0)
+    rotation.openAuth("openai", oauthA.id, storage.fingerprint(oauthA), 100)
 
     const hooks = await createHooks("openai")
-    rotation.track("s10", "openai")
-    rotation.trackAccount("s10", 0)
+    rotation.trackRequest("s10", "openai", 150)
 
     await hooks.event!(retryEvent("s10", "Rate Limited"))
 
@@ -460,10 +456,10 @@ describe("event — rate limit detection", () => {
   test("flags rotation on 'Too Many Requests'", async () => {
     storage.add("openai", oauthA)
     storage.activate("openai", 0)
+    rotation.openAuth("openai", oauthA.id, storage.fingerprint(oauthA), 100)
 
     const hooks = await createHooks("openai")
-    rotation.track("s11", "openai")
-    rotation.trackAccount("s11", 0)
+    rotation.trackRequest("s11", "openai", 150)
 
     await hooks.event!(retryEvent("s11", "Too Many Requests"))
     expect(rotation.consume("s11")).toBe(true)
@@ -472,10 +468,10 @@ describe("event — rate limit detection", () => {
   test("flags rotation on case-insensitive rate limit message", async () => {
     storage.add("openai", oauthA)
     storage.activate("openai", 0)
+    rotation.openAuth("openai", oauthA.id, storage.fingerprint(oauthA), 100)
 
     const hooks = await createHooks("openai")
-    rotation.track("s12", "openai")
-    rotation.trackAccount("s12", 0)
+    rotation.trackRequest("s12", "openai", 150)
 
     await hooks.event!(retryEvent("s12", "You have been rate limited"))
     expect(rotation.consume("s12")).toBe(true)
@@ -484,10 +480,10 @@ describe("event — rate limit detection", () => {
   test("flags rotation on usage limit message", async () => {
     storage.add("openai", oauthA)
     storage.activate("openai", 0)
+    rotation.openAuth("openai", oauthA.id, storage.fingerprint(oauthA), 100)
 
     const hooks = await createHooks("openai")
-    rotation.track("s12b", "openai")
-    rotation.trackAccount("s12b", 0)
+    rotation.trackRequest("s12b", "openai", 150)
 
     await hooks.event!(retryEvent("s12b", "The usage limit has been reached"))
     expect(rotation.consume("s12b")).toBe(true)
@@ -496,10 +492,10 @@ describe("event — rate limit detection", () => {
   test("ignores non-rate-limit retry messages", async () => {
     storage.add("openai", oauthA)
     storage.activate("openai", 0)
+    rotation.openAuth("openai", oauthA.id, storage.fingerprint(oauthA), 100)
 
     const hooks = await createHooks("openai")
-    rotation.track("s13", "openai")
-    rotation.trackAccount("s13", 0)
+    rotation.trackRequest("s13", "openai", 150)
 
     await hooks.event!(retryEvent("s13", "Provider is overloaded"))
     expect(rotation.consume("s13")).toBe(false)
@@ -508,10 +504,10 @@ describe("event — rate limit detection", () => {
   test("handles tracked providers globally", async () => {
     storage.add("anthropic", oauthA)
     storage.activate("anthropic", 0)
+    rotation.openAuth("anthropic", oauthA.id, storage.fingerprint(oauthA), 100)
 
     const hooks = await createHooks("openai")
-    rotation.track("s14", "anthropic")
-    rotation.trackAccount("s14", 0)
+    rotation.trackRequest("s14", "anthropic", 150)
 
     await hooks.event!(retryEvent("s14", "Rate Limited"))
     expect(rotation.consume("s14")).toBe(true)
@@ -521,10 +517,11 @@ describe("event — rate limit detection", () => {
     storage.add("openai", oauthA)
     storage.add("openai", oauthB)
     storage.activate("openai", 1) // active is B
+    rotation.openAuth("openai", oauthA.id, storage.fingerprint(oauthA), 100)
+    rotation.openAuth("openai", oauthB.id, storage.fingerprint(oauthB), 200)
 
     const hooks = await createHooks("openai")
-    rotation.track("s15", "openai")
-    rotation.trackAccount("s15", 0) // but A was the account used
+    rotation.trackRequest("s15", "openai", 150)
 
     await hooks.event!(retryEvent("s15", "Rate Limited"))
 
@@ -535,10 +532,10 @@ describe("event — rate limit detection", () => {
   test("suppresses rate-limit warning toast when no next account exists", async () => {
     storage.add("openai", oauthA)
     storage.activate("openai", 0)
+    rotation.openAuth("openai", oauthA.id, storage.fingerprint(oauthA), 100)
 
     const hooks = await createHooks("openai")
-    rotation.track("s16", "openai")
-    rotation.trackAccount("s16", 0)
+    rotation.trackRequest("s16", "openai", 150)
 
     await hooks.event!(retryEvent("s16", "Rate Limited"))
 
@@ -554,13 +551,13 @@ describe("end-to-end rotation flow", () => {
     storage.add("openai", oauthA)
     storage.add("openai", oauthB)
     storage.activate("openai", 0)
+    rotation.openAuth("openai", oauthA.id, storage.fingerprint(oauthA), 0)
 
     const hooks = await createHooks("openai")
 
-    // Normal path — tracks session and account
+    // Normal path — tracks latest request context
     await runChatParams(hooks, "flow-1", "openai")
-    expect(rotation.provider("flow-1")).toBe("openai")
-    expect(rotation.usedAccount("flow-1")).toBe(0)
+    expect(rotation.request("flow-1")?.providerID).toBe("openai")
 
     // Rate limit event fires
     await hooks.event!({
@@ -581,12 +578,13 @@ describe("end-to-end rotation flow", () => {
 
     expect(authSetCalls).toHaveLength(1)
     expect(authSetCalls[0].body.refresh).toBe("refresh-b")
-    expect(storage.read("openai")!.active).toBe(1)
+    expect(storage.read("openai")!.active).toBe(0)
   })
 
   test("shows terminal error toast when all accounts are exhausted", async () => {
     storage.add("openai", oauthA)
     storage.activate("openai", 0)
+    rotation.openAuth("openai", oauthA.id, storage.fingerprint(oauthA), 0)
 
     const hooks = await createHooks("openai")
     await runChatParams(hooks, "flow-2", "openai")

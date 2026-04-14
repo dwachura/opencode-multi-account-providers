@@ -60,7 +60,7 @@ beforeAll(async () => {
     },
     plugin: [
       [AUTH_PLUGIN_DIR, {}],
-      [PROJECT_ROOT, {}],
+      [PROJECT_ROOT, { enableDefaultExtractor: true }],
     ],
   }
 
@@ -369,6 +369,7 @@ describe("oauth rotation on rate limit", () => {
     expect(entry?.access).toBe("oa-bob")
 
     // Verify multi-auth shows rotation
+    await waitFor(() => readMultiAuth()?.active === 1)
     const multiAuth = readMultiAuth()!
     expect(multiAuth.exhausted).toContain(0)
     expect(multiAuth.active).toBe(1)
@@ -406,17 +407,24 @@ describe("single account passthrough", () => {
 })
 
 describe("auth.json file watcher", () => {
-  test("captures the initial auth.json entry on first prompt cold start", async () => {
+  test("captures the current auth.json entry when it is rewritten", async () => {
     storage.write(PROVIDER_ID, { active: 0, accounts: [], exhausted: [] })
 
-    const session = await client.session.create()
-    await sendPrompt(session.data!.id, "cold start capture")
+    const expires = Date.now() + 3600_000
+    await setServerTokens("user-a", "watcher-initial", "watcher-initial-refresh", expires)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    writeOAuthAuth("watcher-initial", "watcher-initial-refresh", expires, "acct_alice")
+
+    await waitFor(() => {
+      const data = readMultiAuth()
+      return data?.accounts.length === 1 && (data.accounts[0] as storage.OAuthAccount | undefined)?.access === "watcher-initial"
+    })
 
     const data = readMultiAuth()!
     expect(data.accounts).toHaveLength(1)
     const account = data.accounts[0] as storage.OAuthAccount
-    expect(account.access).toBe("access-a")
-    expect(account.id).toBe("access-a")
+    expect(account.access).toBe("watcher-initial")
+    expect(account.id).toBe("watcher-initial")
   })
 
   test("captures a new account when auth.json is rewritten", async () => {

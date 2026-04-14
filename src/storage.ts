@@ -20,7 +20,7 @@ export type OAuthAccount = {
 export type Account = OAuthAccount
 
 export type ProviderData = {
-  active: number
+  active: number | null
   accounts: Account[]
   exhausted: number[]
 }
@@ -222,7 +222,7 @@ export function read(provider: string): ProviderData | undefined {
   })
 
   return {
-    active: activeIdx === -1 ? 0 : activeIdx,
+    active: activeIdx === -1 ? null : activeIdx,
     accounts,
     exhausted,
   }
@@ -261,7 +261,7 @@ export function write(provider: string, data: ProviderData): void {
 }
 
 export function add(provider: string, account: OAuthAccount): number {
-  const data = read(provider) ?? { active: 0, accounts: [], exhausted: [] }
+  const data = read(provider) ?? { active: null, accounts: [], exhausted: [] }
   const fp = fingerprint(account)
   const existingIdx = data.accounts.findIndex((a) => fingerprint(a) === fp)
   if (existingIdx !== -1) {
@@ -272,7 +272,7 @@ export function add(provider: string, account: OAuthAccount): number {
   data.accounts.push(account)
   data.active = data.accounts.length - 1
   write(provider, data)
-  return data.active
+  return data.active as number
 }
 
 export function resolve(provider: string, selector: AccountSelector): ResolveResult {
@@ -315,6 +315,16 @@ export function resolve(provider: string, selector: AccountSelector): ResolveRes
   return [...matches.values()][0]
 }
 
+export function findByFingerprint(provider: string, value: string): { index: number, account: OAuthAccount } | undefined {
+  const data = read(provider)
+  if (!data) return undefined
+  const index = data.accounts.findIndex(
+    (account) => fingerprint(account as OAuthAccount) === value,
+  )
+  if (index === -1) return undefined
+  return { index, account: data.accounts[index] as OAuthAccount }
+}
+
 export function remove(provider: string, selector: AccountSelector): RemoveResult {
   const resolved = resolve(provider, selector)
   if (resolved.status !== "match") return resolved
@@ -331,7 +341,7 @@ export function remove(provider: string, selector: AccountSelector): RemoveResul
     .map((index) => (index > removedIndex ? index - 1 : index))
 
   if (accounts.length === 0) {
-    write(provider, { active: 0, accounts, exhausted })
+    write(provider, { active: null, accounts, exhausted })
     return {
       status: "removed",
       removedIndex,
@@ -341,11 +351,15 @@ export function remove(provider: string, selector: AccountSelector): RemoveResul
     }
   }
 
-  const nextActiveIndex = removedIndex < data.active
-    ? data.active - 1
-    : Math.min(data.active, accounts.length - 1)
-  const nextActive = accounts[nextActiveIndex] as OAuthAccount
-  write(provider, { active: nextActiveIndex, accounts, exhausted })
+  const nextActiveIndex = data.active === null
+    ? undefined
+    : removedIndex < data.active
+      ? data.active - 1
+      : Math.min(data.active, accounts.length - 1)
+  const nextActive = nextActiveIndex === undefined
+    ? undefined
+    : accounts[nextActiveIndex] as OAuthAccount
+  write(provider, { active: nextActiveIndex ?? null, accounts, exhausted })
 
   return {
     status: "removed",
@@ -358,7 +372,7 @@ export function remove(provider: string, selector: AccountSelector): RemoveResul
   }
 }
 
-export function activate(provider: string, index: number): void {
+export function activate(provider: string, index: number | null): void {
   const data = read(provider)
   if (!data) return
   data.active = index
@@ -392,6 +406,12 @@ export function next(provider: string): number | undefined {
   const data = read(provider)
   if (!data || data.accounts.length <= 1) return undefined
   const exhaustedSet = new Set(data.exhausted)
+  if (data.active === null) {
+    for (let i = 0; i < data.accounts.length; i++) {
+      if (!exhaustedSet.has(i)) return i
+    }
+    return undefined
+  }
   for (let i = 1; i <= data.accounts.length; i++) {
     const candidate = (data.active + i) % data.accounts.length
     if (!exhaustedSet.has(candidate)) return candidate

@@ -80,6 +80,7 @@ Add a new TUI entrypoint that handles:
 - rendered dialog UI
 - reading and mutating account storage
 - syncing active account changes through client auth APIs
+- waiting for watcher/storage reconciliation after auth changes
 - local success/error toasts
 
 ### Shared state
@@ -149,32 +150,30 @@ On failure:
 
 ## Packaging work
 
+Status: done.
+
 Add a TUI entrypoint.
 
-Expected package changes:
+Package changes:
 
 - keep `./server`
-- add `./tui`
+- added `./tui`
 
-Likely file additions:
+Actual file:
 
-- `src/tui.tsx`
-- optional small shared helper files if needed, but prefer keeping the first version compact
+- `src/tui.ts` (non-JSX; uses built-in TUI dialog primitives)
 
-Expected TUI entry shape:
+Actual TUI entry shape:
 
-- `/** @jsxImportSource @opentui/solid */`
-- `import type { TuiPluginModule } from "@opencode-ai/plugin/tui"`
+- `import type { TuiDialogSelectOption, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"`
 
-Expected dependency additions:
-
-- `@opentui/core`
-- `@opentui/solid`
-- `solid-js`
+No additional runtime dependencies were required; the `@opentui/*` / `solid-js` path was not taken.
 
 ## Iteration plan
 
 ### Iteration 0: TUI entry spike
+
+Status: done.
 
 Objective:
 
@@ -197,6 +196,8 @@ Exit criteria:
 
 ### Iteration 1: read-only dialog
 
+Status: done.
+
 Objective:
 
 Show current stored account state in the dialog.
@@ -216,6 +217,8 @@ Exit criteria:
 
 ### Iteration 2: interactive dialog structure
 
+Status: done.
+
 Objective:
 
 Add nested dialog interaction without mutations yet, if needed.
@@ -234,6 +237,8 @@ Exit criteria:
 
 ### Iteration 3: switch
 
+Status: done.
+
 Objective:
 
 Allow manual active-account switching from the dialog.
@@ -241,8 +246,8 @@ Allow manual active-account switching from the dialog.
 Work:
 
 1. Resolve selected account using `src/storage.ts`
-2. Call `storage.activate(provider, index)`
-3. Sync auth using the selected account credentials
+2. Sync auth using the selected account credentials
+3. Wait for storage to reflect the new active account
 4. Refresh dialog state
 5. Show success toast
 
@@ -253,11 +258,13 @@ Rules:
 
 Exit criteria:
 
-- active account changes in DB
+- active account changes in DB after reconciliation
 - provider auth is updated
-- UI reflects new active account immediately
+- UI reflects new active account after reconciliation
 
 ### Iteration 4: reset
+
+Status: done.
 
 Objective:
 
@@ -277,6 +284,8 @@ Exit criteria:
 
 ### Iteration 5: disconnect
 
+Status: done.
+
 Objective:
 
 Allow disconnecting stored accounts safely.
@@ -288,17 +297,21 @@ Work:
 3. Refresh dialog state
 4. Show success toast
 
-Rules:
+Rules (as shipped):
 
 - preserve valid `active` and `exhausted` indices
-- if no accounts remain, do not clear provider auth in v1 unless a clean path is confirmed
+- if no accounts remain, call `client.auth.remove({ providerID })` to log the provider out
+- on auth failure, restore the previous storage snapshot
 
 Exit criteria:
 
 - inactive and active disconnect flows both work
 - auth sync only happens when needed
+- last-account disconnect removes provider auth
 
 ### Iteration 6: guided connect flow
+
+Status: done.
 
 Objective:
 
@@ -312,13 +325,17 @@ Work:
 4. Detect newly captured account and refresh the list
 5. Show pending/success/timeout states in the dialog
 
-V1 behavior:
+Shipped behavior:
 
-- first captured account becomes active
-- later captured accounts are stored without auto-switching
-- skip post-add confirm if it adds noticeable complexity
+- connect sub-dialog offers two modes:
+  - `Connect account` (preserve): capture new account then restore the previously active one via `client.auth.set`
+  - `Connect and activate`: keep the newly captured account active
+- uses `client.provider.oauth.authorize` / `client.provider.oauth.callback`
+- supports both `auto` (browser) and code-prompt flows
+- waits for watcher reconciliation to detect the captured account before closing the flow
+- refreshes the root dialog on success or timeout
 
-Exit criteria:
+Exit criteria (met):
 
 - add flow completes end-to-end through the existing watcher/capture path
 
@@ -362,6 +379,14 @@ Manual checks in real TUI:
 3. no provider request is sent
 4. switch/reset/remove update dialog state correctly
 5. add flow refreshes after capture
+
+Current note:
+
+- the dedicated `e2e:tui` harness is currently unreliable and should not be treated as acceptance coverage yet
+- observed problems were in harness/runtime integration, not in the unit-test dialog flow itself:
+  - TUI config discovery differed from server config discovery
+  - test auth plugin needed a TUI export even though it is server-oriented
+  - live auth state, watcher capture, and helper-side `auth.json` rewrites were not staying aligned consistently
 
 ## Deferred items
 

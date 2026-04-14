@@ -36,6 +36,6 @@ export function register(providerID: string, extractor: IdentityExtractor): void
   registry[providerID] = extractor
 }
 
-export function get(providerID: string): IdentityExtractor {
-  return registry[providerID] ?? defaultExtractor
+export function get(providerID: string, enableDefaultExtractor = false): IdentityExtractor | undefined {
+  return registry[providerID] ?? (enableDefaultExtractor ? defaultExtractor : undefined)
 }

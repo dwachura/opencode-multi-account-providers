@@ -1,6 +1,7 @@
 import { createWriteStream, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
+import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import * as storage from "../src/storage"
 
 const PROJECT_ROOT = join(import.meta.dir, "..")
@@ -41,6 +42,7 @@ type State = {
   fakeLogPath: string
   fakeBase: string
   fakePort: number
+  opencodeBase: string
 }
 
 function usage() {
@@ -83,6 +85,18 @@ function requireState(): State {
   }
 }
 
+function getClient(state: State) {
+  return createOpencodeClient({ baseUrl: state.opencodeBase })
+}
+
+async function ensureOpencodeAvailable(state: State) {
+  try {
+    const res = await fetch(`${state.opencodeBase}/session`)
+    if (res.ok) return
+  } catch {}
+  throw new Error(`OpenCode TUI is not reachable at ${state.opencodeBase}. Restart it with \`bun run e2e:tui\`.`)
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
   if (!res.ok) {
@@ -104,14 +118,30 @@ async function waitForServer(base: string, timeoutMs = 10_000) {
   throw new Error(`Timed out waiting for fake server at ${base}`)
 }
 
+async function waitForOpencode(base: string, timeoutMs = 20_000) {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${base}/session`)
+      if (res.ok) return
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error(`Timed out waiting for opencode at ${base}`)
+}
+
 function defaultEnvRoot() {
   return join(E2E_ROOT, `run-${Date.now()}`)
 }
 
-function writeConfig(configDir: string, fakeBase: string) {
+function defaultOpencodePort() {
+  return 4000 + Math.floor(Math.random() * 1000)
+}
+
+function writeConfig(configDir: string, xdgConfigHome: string, fakeBase: string) {
   const plugin = [
     [AUTH_PLUGIN_DIR, {}],
-    [PROJECT_ROOT, {}],
+    [PROJECT_ROOT, { enableDefaultExtractor: true }],
   ]
 
   const config = {
@@ -145,8 +175,13 @@ function writeConfig(configDir: string, fakeBase: string) {
   }
 
   mkdirSync(configDir, { recursive: true })
+  const xdgOpencodeConfigDir = join(xdgConfigHome, "opencode")
+  mkdirSync(xdgOpencodeConfigDir, { recursive: true })
+
   writeFileSync(join(configDir, "opencode.json"), JSON.stringify(config, null, 2))
   writeFileSync(join(configDir, "tui.json"), JSON.stringify(tuiConfig, null, 2))
+  writeFileSync(join(xdgOpencodeConfigDir, "opencode.json"), JSON.stringify(config, null, 2))
+  writeFileSync(join(xdgOpencodeConfigDir, "tui.json"), JSON.stringify(tuiConfig, null, 2))
 }
 
 function writeAuthJson(authJsonPath: string, user: User) {
@@ -244,20 +279,73 @@ function configureStorage(state: State) {
   storage.configure(state.dataDir)
 }
 
+async function setLiveAuth(state: State, account: storage.OAuthAccount) {
+  const client = getClient(state)
+  await client.auth.set({
+    providerID: PROVIDER_ID,
+    auth: {
+      type: "oauth",
+      access: account.access,
+      refresh: account.refresh,
+      expires: account.expires,
+      ...(account.accountId && { accountId: account.accountId }),
+      ...(account.enterpriseUrl && { enterpriseUrl: account.enterpriseUrl }),
+    },
+  })
+}
+
+async function removeLiveAuth(state: State) {
+  const client = getClient(state)
+  await client.auth.remove({ providerID: PROVIDER_ID })
+}
+
+async function waitForStoredAccount(predicate: () => boolean, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error("Timed out waiting for storage reconciliation")
+}
+
 async function addAccount(input: string, initialReqLimitInput?: string) {
   const state = requireState()
+  await ensureOpencodeAvailable(state)
   const initialReqLimit = initialReqLimitInput === undefined ? undefined : Number(initialReqLimitInput)
   if (initialReqLimitInput !== undefined && !Number.isFinite(initialReqLimit)) {
     throw new Error("initialReqLimit must be a number")
   }
   const user = await ensureUser(state, input, initialReqLimit)
   configureStorage(state)
-  const before = storage.read(PROVIDER_ID)?.accounts.length ?? 0
-  writeAuthJson(state.authJsonPath, user)
-  await new Promise((resolve) => setTimeout(resolve, 300))
+  const beforeData = storage.read(PROVIDER_ID)
+  const before = beforeData?.accounts.length ?? 0
+  const previousActive = beforeData?.active === null || beforeData?.active === undefined
+    ? undefined
+    : beforeData?.accounts[beforeData.active] as storage.OAuthAccount | undefined
+  const nextAccount: storage.OAuthAccount = {
+    id: user.id,
+    label: user.id,
+    type: "oauth",
+    access: user.access_token ?? user.id,
+    refresh: user.refresh_token ?? user.id,
+    expires: user.token_expires,
+    ...(user.account_id && { accountId: user.account_id }),
+  }
+
+  await setLiveAuth(state, nextAccount)
+  await waitForStoredAccount(() => {
+    const data = storage.read(PROVIDER_ID)
+    return (data?.accounts.length ?? 0) > before || data?.accounts.some((account) => (account as storage.OAuthAccount).id === nextAccount.id) === true
+  })
+
+  if (previousActive && storage.fingerprint(previousActive) !== storage.fingerprint(nextAccount)) {
+    await setLiveAuth(state, previousActive)
+    await waitForStoredAccount(() => storage.read(PROVIDER_ID)?.active === findActiveIndex(PROVIDER_ID, previousActive))
+  }
+
   const afterData = storage.read(PROVIDER_ID)
   const after = afterData?.accounts.length ?? 0
-  console.log(`Wrote ${user.id} credentials to ${state.authJsonPath}`)
+  console.log(`Synced ${user.id} credentials through ${state.opencodeBase}`)
   if (after > before) {
     console.log(`Captured new account. Stored accounts: ${after}`)
     return
@@ -269,6 +357,12 @@ async function addAccount(input: string, initialReqLimitInput?: string) {
   console.log("No stored account observed yet. Make sure the TUI/plugin is running.")
 }
 
+function findActiveIndex(provider: string, account: storage.OAuthAccount) {
+  const data = storage.read(provider)
+  if (!data) return null
+  return data.accounts.findIndex((candidate) => storage.fingerprint(candidate as storage.OAuthAccount) === storage.fingerprint(account))
+}
+
 function accountDisplayName(account: storage.OAuthAccount, users: User[]) {
   const user = users.find((candidate) => candidate.access_token === account.access)
   return user ? user.id : account.label
@@ -276,6 +370,7 @@ function accountDisplayName(account: storage.OAuthAccount, users: User[]) {
 
 async function listAccounts() {
   const state = requireState()
+  await ensureOpencodeAvailable(state)
   configureStorage(state)
   const data = storage.read(PROVIDER_ID)
   const users = await listUsers(state).catch(() => [] as User[])
@@ -298,6 +393,7 @@ async function listAccounts() {
 
 async function removeAccount(input: string) {
   const state = requireState()
+  await ensureOpencodeAvailable(state)
   configureStorage(state)
   const data = storage.read(PROVIDER_ID)
   if (!data || data.accounts.length === 0) {
@@ -333,23 +429,11 @@ async function removeAccount(input: string) {
 
   if (accounts.length > 0 && data.active === index) {
     const next = accounts[active] as storage.OAuthAccount
-    writeFileSync(
-      state.authJsonPath,
-      JSON.stringify(
-        {
-          [PROVIDER_ID]: {
-            type: "oauth",
-            access: next.access,
-            refresh: next.refresh,
-            expires: next.expires,
-            ...(next.accountId && { accountId: next.accountId }),
-          },
-        },
-        null,
-        2,
-      ),
-      { mode: 0o600 },
-    )
+    await setLiveAuth(state, next)
+  }
+
+  if (accounts.length === 0 && data.active === index) {
+    await removeLiveAuth(state)
   }
 
   console.log(`Removed account ${(removed as storage.OAuthAccount).id}`)
@@ -360,6 +444,7 @@ async function removeAccount(input: string) {
 
 async function setLimit(userInput: string, reqLimitInput: string, tokLimitInput?: string) {
   const state = requireState()
+  await ensureOpencodeAvailable(state)
   const users = await listUsers(state)
   const user = resolveUser(users, userInput)
   const reqLimit = Number(reqLimitInput)
@@ -377,6 +462,7 @@ async function setLimit(userInput: string, reqLimitInput: string, tokLimitInput?
 
 async function resetState() {
   const state = requireState()
+  await ensureOpencodeAvailable(state)
   await fetchJson(`${state.fakeBase}/admin/reset`, { method: "POST" })
   configureStorage(state)
   storage.reset(PROVIDER_ID)
@@ -425,6 +511,8 @@ async function launchTui() {
   const fakeLogPath = join(envRoot, "fake-server.log")
   const fakePort = Number(process.env.E2E_FAKE_PORT ?? 18080)
   const fakeBase = `http://localhost:${fakePort}`
+  const opencodePort = Number(process.env.E2E_OPENCODE_PORT ?? defaultOpencodePort())
+  const opencodeBase = process.env.E2E_OPENCODE_BASE ?? `http://127.0.0.1:${opencodePort}`
 
   rmSync(envRoot, { recursive: true, force: true })
   mkdirSync(homeDir, { recursive: true })
@@ -476,7 +564,7 @@ async function launchTui() {
   })
 
   await waitForServer(fakeBase)
-  writeConfig(configDir, fakeBase)
+  writeConfig(configDir, xdgConfigHome, fakeBase)
   writeBootstrapAuthJson(authJsonPath)
 
   const state: State = {
@@ -487,12 +575,11 @@ async function launchTui() {
     fakeLogPath,
     fakeBase,
     fakePort,
+    opencodeBase,
   }
-  saveState(state)
-  printInstructions(state)
 
   const opencode = Bun.spawn({
-    cmd: ["opencode"],
+    cmd: ["opencode", `--port=${opencodePort}`],
     cwd: PROJECT_ROOT,
     stdin: "inherit",
     stdout: "inherit",
@@ -510,6 +597,10 @@ async function launchTui() {
       XDG_STATE_HOME: xdgStateHome,
     },
   })
+
+  await waitForOpencode(opencodeBase)
+  saveState(state)
+  printInstructions(state)
 
   const code = await opencode.exited
   cleanup()

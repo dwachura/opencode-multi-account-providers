@@ -18,7 +18,8 @@ The implementation uses OpenCode's `auth.json` as the integration boundary.
 2. This plugin captures multiple OAuth accounts into its own SQLite storage.
 3. On rate limit, the server plugin selects another stored account.
 4. The plugin writes the next account through `client.auth.set(...)`.
-5. On the next request, the provider auth plugin re-reads auth and uses the updated credentials.
+5. The watcher reconciles `auth.json` back into plugin storage and the in-memory auth timeline.
+6. On the next request, the provider auth plugin re-reads auth and uses the updated credentials.
 
 This keeps provider-specific auth logic outside this plugin.
 
@@ -29,7 +30,7 @@ This keeps provider-specific auth logic outside this plugin.
 Server responsibilities:
 
 - watch `auth.json`
-- capture newly logged-in accounts
+- reconcile auth-derived storage state from `auth.json`
 - detect rate-limited retries
 - mark accounts exhausted
 - rotate to the next available account
@@ -47,13 +48,14 @@ TUI responsibilities:
 - reset selected exhausted accounts or all exhausted accounts
 - disconnect stored accounts
 - log out via provider auth removal when the last stored account is disconnected
+- wait for storage reconciliation after auth changes instead of mutating active state directly
 
 ### `src/storage.ts`
 
 Shared SQLite storage for:
 
 - stored accounts
-- active account index
+- active account index or `null` when no auth is active for that provider
 - exhausted account indices
 
 Current DB path:
@@ -64,24 +66,33 @@ Current DB path:
 
 In-memory request/session state used by the server plugin to keep rotation safe across retries.
 
+It stores:
+
+- latest request context per session
+- auth interval history per provider
+- pending rotation flags
+
 ## Capture Flow
 
-Account capture has two paths:
+Account capture and active-account reconciliation are watcher-owned.
 
-1. Primary: filesystem watcher on `auth.json`
-2. Fallback: first request path in `chat.params`
-
-The fallback exists for cold start, when auth data already existed before the plugin started.
+1. On startup, the watcher scans the current `auth.json`
+2. On every later `auth.json` change, it:
+   - derives provider identity
+   - upserts the account into SQLite storage
+   - marks the matching account active, or clears active when auth disappears
+   - updates the auth interval timeline
 
 ## Automatic Rotation Flow
 
 ```text
 request fails with rate limit
 -> OpenCode retry emits session.status retry event
--> plugin marks the used account exhausted and flags rotation
+-> plugin resolves the account active at request start time from the auth timeline
+-> plugin marks that account exhausted and flags rotation
 -> next chat.params sees the flag
--> plugin activates the next available account
 -> plugin writes new credentials via client.auth.set(...)
+-> watcher reconciles storage/timeline from auth.json
 -> retried request uses the new account
 ```
 
@@ -103,6 +114,10 @@ Current dialog structure:
   - `Connect account`
   - `Reset exhausted accounts`
   - account rows
+- connect dialog
+  - `Connect account` (preserve mode: restore previous active after capture)
+  - `Connect and activate` (keep newly captured account active)
+  - `Back`
 - account dialog
   - `Set active`
   - `Disconnect account`
@@ -117,9 +132,9 @@ Current dialog structure:
 
 ### Manual switch
 
-- update active index in storage
 - call `client.auth.set(...)`
-- on failure, restore previous active index
+- watcher reconciles active account in storage
+- TUI waits for reconciled active state before showing success
 
 ### Disconnect account
 
@@ -135,23 +150,26 @@ The plugin does not edit `auth.json` directly for logout.
 Each provider stores:
 
 - ordered accounts
-- active index
+- active index or `null`
 - exhausted indices
 
 The plugin is loaded once globally and routes capture, rotation, and TUI actions by runtime provider ID.
 
-Accounts are deduplicated by a stable fingerprint derived from provider identity data. OpenAI has a dedicated identity extractor. Other providers may fall back to weaker identity matching.
+Accounts are deduplicated by a stable fingerprint derived from provider identity data.
+
+- OpenAI identity is extracted strictly from `chatgpt_account_user_id`
+- default token-as-id extraction is disabled by default and enabled only in test/fake setups
 
 ## Important Assumptions
 
 - OAuth-based auth only
 - provider auth plugin must re-read auth on each request
 - best-supported provider is currently `openai`
-- event-side rotation bookkeeping must stay synchronous
+- retry attribution depends on watcher-maintained auth intervals plus request start time
 
 ## Known Tradeoffs
 
-- watcher-based capture is best-effort
+- watcher reconciliation is asynchronous, so UI/server flows may briefly wait for storage to reflect auth changes
 - there can still be one wasted retry before the new credentials are used, depending on provider-side auth caching inside the failed request path
 - provider support quality depends on available identity extraction and request-time auth behavior
 

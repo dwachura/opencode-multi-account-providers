@@ -1,16 +1,23 @@
 # Backlog
 
-## TUI Account Management
+## Interactive TUI Harness
 
-The local `/provider-accounts` flow exists, but one major piece is still deferred:
+`script/e2e.ts` still needs more work before it can be treated as a stable validation path.
 
-- guided `Connect account` flow inside the TUI
+Open findings:
 
-Current expectation for that work:
+- TUI plugin config discovery did not match server-side config discovery
+- external TUI plugin loading is stricter than server plugin loading; server-only helper plugins still need a `tui()` export
+- helper-side fake-account mutations can leave live OpenCode auth state, `auth.json`, and watcher-derived storage out of sync
+- fake-provider prompts in the interactive harness still sometimes reach the fake server as `Invalid credentials`
 
-- reuse the normal `opencode auth login <provider>` flow
-- keep OAuth implementation outside this plugin
-- detect capture completion and refresh the dialog
+Desired end state:
+
+- `bun run e2e:tui`
+- `bun run e2e:account:add <label> <limit>`
+- prompt in the live TUI
+
+should reliably drive the same auth state observed by the watcher and by the provider request path.
 
 ## Account Metadata
 

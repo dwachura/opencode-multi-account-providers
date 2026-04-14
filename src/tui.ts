@@ -92,6 +92,26 @@ async function syncProviderAuth(api: TuiPluginApi, provider: string, account: st
   })
 }
 
+async function waitForActiveAccountFingerprint(
+  provider: string,
+  fingerprint: string,
+  timeoutMs = 5_000,
+  intervalMs = 100,
+) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const data = storage.read(provider)
+    if (data && data.active !== null) {
+      const index = findAccountIndexByFingerprint(data, fingerprint)
+      if (index !== -1 && data.active === index) {
+        return { data, index, account: data.accounts[index] as storage.OAuthAccount }
+      }
+    }
+    await sleep(intervalMs)
+  }
+  return undefined
+}
+
 async function removeProviderAuth(api: TuiPluginApi, provider: string) {
   await api.client.auth.remove({ providerID: provider })
 }
@@ -194,7 +214,9 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string, goBack:
 
       const before = storage.read(provider)
       const beforeSnapshot = before ? cloneProviderData(before) : undefined
-      const previousActive = beforeSnapshot?.accounts[beforeSnapshot.active] as storage.OAuthAccount | undefined
+      const previousActive = beforeSnapshot && beforeSnapshot.active !== null
+        ? beforeSnapshot.accounts[beforeSnapshot.active] as storage.OAuthAccount | undefined
+        : undefined
       const previousFingerprint = previousActive ? storage.fingerprint(previousActive) : undefined
 
       const methodsResult = await api.client.provider.auth({}) as any
@@ -256,11 +278,18 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string, goBack:
         if (value.mode === "preserve" && previousFingerprint) {
           const previousIndex = findAccountIndexByFingerprint(connected.data, previousFingerprint)
           if (previousIndex !== -1 && previousIndex !== connected.index) {
-            storage.activate(provider, previousIndex)
             try {
               await syncProviderAuth(api, provider, connected.data.accounts[previousIndex] as storage.OAuthAccount)
+              const restored = await waitForActiveAccountFingerprint(provider, previousFingerprint)
+              if (!restored) {
+                api.ui.toast({
+                  variant: "error",
+                  message: `Connected ${connected.account.label} but timed out restoring the previous active account`,
+                })
+                api.ui.dialog.replace(() => renderRoot())
+                return
+              }
             } catch {
-              storage.activate(provider, connected.index)
               api.ui.toast({
                 variant: "error",
                 message: `Connected ${connected.account.label} but failed to restore the previous active account`,
@@ -278,7 +307,6 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string, goBack:
           return
         }
 
-        storage.activate(provider, connected.index)
         api.ui.toast({
           variant: "success",
           message: value.mode === "activate"
@@ -523,13 +551,20 @@ function showProviderAccountsDialog(api: TuiPluginApi, provider: string, goBack:
               return
             }
 
-          const previousActive = current.active
-          storage.activate(provider, index)
-
           try {
             await syncProviderAuth(api, provider, next as storage.OAuthAccount)
+            const synced = await waitForActiveAccountFingerprint(
+              provider,
+              storage.fingerprint(next as storage.OAuthAccount),
+            )
+            if (!synced) {
+              api.ui.toast({
+                variant: "error",
+                message: `Failed to observe active account change to ${next.label}`,
+              })
+              return
+            }
           } catch {
-            storage.activate(provider, previousActive)
             api.ui.toast({
               variant: "error",
               message: `Failed to set active account to ${next.label}`,

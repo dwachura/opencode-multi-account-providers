@@ -93,6 +93,12 @@ describe("read/write", () => {
     expect(storage.read("openai")).toEqual(data)
   })
 
+  test("write then read preserves null active", () => {
+    const data: storage.ProviderData = { active: null, accounts: [oauthA], exhausted: [] }
+    storage.write("openai", data)
+    expect(storage.read("openai")).toEqual(data)
+  })
+
   test("write creates directory if missing", () => {
     const nested = join(testDir, "sub", "deep")
     storage.configure(nested)
@@ -352,6 +358,12 @@ describe("activate", () => {
   test("no-op on missing provider", () => {
     storage.activate("openai", 0) // should not throw
   })
+
+  test("can clear active account", () => {
+    storage.add("openai", oauthA)
+    storage.activate("openai", null)
+    expect(storage.read("openai")!.active).toBeNull()
+  })
 })
 
 // ── exhaust ──
@@ -466,6 +478,16 @@ describe("next", () => {
     storage.exhaust("openai", 0)
     storage.exhaust("openai", 1)
     expect(storage.next("openai")).toBeUndefined()
+  })
+
+  test("when active is null, returns first non-exhausted account", () => {
+    const c: storage.OAuthAccount = { ...oauthA, id: "user_c", label: "c", accountId: "acct_c" }
+    storage.add("openai", oauthA)
+    storage.add("openai", oauthB)
+    storage.add("openai", c)
+    storage.activate("openai", null)
+    storage.exhaust("openai", 0)
+    expect(storage.next("openai")).toBe(1)
   })
 })
 

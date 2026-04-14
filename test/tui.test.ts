@@ -44,6 +44,8 @@ function writeOAuthAuth(provider: string, account: storage.OAuthAccount) {
 function createApi(options: {
   authSetError?: Error,
   authRemoveError?: Error,
+  authSetHandler?: (input: any) => void | Promise<void>,
+  authRemoveHandler?: (input: any) => void | Promise<void>,
   providerMethods?: Array<{ type: string, label: string, prompts?: unknown[] }>,
   providerAuthData?: Record<string, Array<{ type: string, label: string, prompts?: unknown[] }>>,
   authorizeResult?: any,
@@ -68,10 +70,12 @@ function createApi(options: {
         set: mock(async (input: any) => {
           authSetCalls.push(input)
           if (options.authSetError) throw options.authSetError
+          await options.authSetHandler?.(input)
         }),
         remove: mock(async (input: any) => {
           authRemoveCalls.push(input)
           if (options.authRemoveError) throw options.authRemoveError
+          await options.authRemoveHandler?.(input)
         }),
       },
       provider: {
@@ -546,6 +550,16 @@ describe("tui plugin module", () => {
       callbackHandler: async () => {
         writeOAuthAuth("openai", work)
         storage.add("openai", work)
+      },
+      authSetHandler: async (input) => {
+        writeOAuthAuth("openai", {
+          ...personal,
+          access: input.auth.access,
+          refresh: input.auth.refresh,
+          expires: input.auth.expires,
+          accountId: input.auth.accountId,
+        })
+        storage.activate("openai", 0)
       },
     })
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
@@ -1076,7 +1090,7 @@ describe("tui plugin module", () => {
     })
   })
 
-  test("set active updates storage, syncs auth, returns to root, and shows success toast", async () => {
+  test("set active waits for storage sync, returns to root, and shows success toast", async () => {
     storage.add("openai", {
       id: "user_a",
       label: "personal",
@@ -1098,7 +1112,21 @@ describe("tui plugin module", () => {
     })
     storage.activate("openai", 0)
 
-    const api = createApi()
+    const api = createApi({
+      authSetHandler: async (input) => {
+        writeOAuthAuth("openai", {
+          id: "user_b",
+          label: "work",
+          type: "oauth",
+          access: input.auth.access,
+          refresh: input.auth.refresh,
+          expires: input.auth.expires,
+          accountId: input.auth.accountId,
+          enterpriseUrl: input.auth.enterpriseUrl,
+        })
+        storage.activate("openai", 1)
+      },
+    })
     await plugin.tui(api as any, { provider: "openai" } as any, {} as any)
 
     const root = await openProviderAccounts()

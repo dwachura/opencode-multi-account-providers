@@ -5,7 +5,6 @@ import * as storage from "./storage"
 import * as rotation from "./rotation"
 import * as identity from "./identity"
 import openaiExtractor from "./identity-openai"
-import fakeExtractor from "./identity-fake"
 
 const PLUGIN_ID = "opencode-multi-account-providers"
 const SERVICE = "plugin.multi-account"
@@ -14,7 +13,10 @@ type LogLevel = "debug" | "info" | "warn" | "error"
 
 // Register built-in identity extractors
 identity.register("openai", openaiExtractor)
-identity.register("fake", fakeExtractor)
+
+type PluginOptions = {
+  enableDefaultExtractor?: boolean
+}
 
 function isRateLimitMessage(msg: string): boolean {
   if (msg === "Rate Limited" || msg === "Too Many Requests") return true
@@ -46,6 +48,17 @@ function toOAuthAccount(
     accountId: entry.accountId,
     enterpriseUrl: entry.enterpriseUrl,
   }
+}
+
+function mapAuthBody(account: storage.OAuthAccount) {
+  return {
+    type: "oauth",
+    refresh: account.refresh,
+    access: account.access,
+    expires: account.expires,
+    ...(account.enterpriseUrl && { enterpriseUrl: account.enterpriseUrl }),
+    ...(account.accountId && { accountId: account.accountId }),
+  } as any
 }
 
 // ── auth.json file watcher ──
@@ -165,6 +178,8 @@ function createAuthJsonWatcher(input: {
 const plugin: PluginModule = {
   id: PLUGIN_ID,
   server: async (input, options) => {
+    const pluginOptions = (options ?? {}) as PluginOptions
+    const enableDefaultExtractor = pluginOptions.enableDefaultExtractor === true
     const pluginLogPath = storage.getLogPath()
 
     const log = (
@@ -204,17 +219,32 @@ const plugin: PluginModule = {
         body: { variant, message, ...(title && { title }) },
       })
 
-    const detectAccount = (providerID: string, origin: "watcher" | "chat"): void => {
-      const entry = storage.readAuthJson(providerID)
-      if (!entry) {
-        writeFileLog("debug", "detectAccount skipped: auth entry missing", {
+    const reconcileProvider = (
+      providerID: string,
+      entry: storage.OAuthAuthEntry,
+      origin: "startup" | "watcher",
+      at = Date.now(),
+    ): void => {
+      const extractor = identity.get(providerID, enableDefaultExtractor)
+      if (!extractor) {
+        void debugLog("warn", "no identity extractor registered for provider; skipping", {
           provider: providerID,
           origin,
+          enableDefaultExtractor,
         })
         return
       }
-      const extractor = identity.get(providerID)
-      const account = toOAuthAccount(providerID, entry, extractor)
+      let account: storage.OAuthAccount | undefined
+      try {
+        account = toOAuthAccount(providerID, entry, extractor)
+      } catch (error) {
+        void debugLog("warn", "could not derive account identity from access token; skipping", {
+          provider: providerID,
+          origin,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        return
+      }
       if (!account) {
         void debugLog("warn", "could not derive account identity from access token; skipping", {
           provider: providerID,
@@ -224,8 +254,12 @@ const plugin: PluginModule = {
       }
       const beforeCount = storage.read(providerID)?.accounts.length ?? 0
       const idx = storage.add(providerID, account)
-      const afterCount = storage.read(providerID)?.accounts.length ?? 0
+      storage.activate(providerID, idx)
+      const after = storage.read(providerID)
+      const afterCount = after?.accounts.length ?? 0
       const isNew = afterCount > beforeCount
+      const fp = storage.fingerprint(account)
+      rotation.openAuth(providerID, account.id, fp, at)
 
       void debugLog("info", isNew ? "captured new account" : "captured existing account", {
         provider: providerID,
@@ -238,9 +272,6 @@ const plugin: PluginModule = {
         new: isNew,
       })
 
-      // Only toast for watcher-originated changes — the user explicitly ran
-      // `opencode auth login` and wants feedback. Skip toasts for cold-start
-      // detection (first chat after plugin start).
       if (origin === "watcher") {
         if (isNew) {
           toast("success", `Captured new account for ${providerID}: ${account.label}`, PLUGIN_ID)
@@ -250,25 +281,44 @@ const plugin: PluginModule = {
       }
     }
 
+    const reconcileAllAuth = (origin: "startup" | "watcher"): void => {
+      const at = Date.now()
+      const entries = storage.readAllAuthJson()
+      const activeProviders = new Set(Object.keys(entries))
+
+      for (const [providerID, entry] of Object.entries(entries)) {
+        reconcileProvider(providerID, entry, origin, at)
+      }
+
+      const knownProviders = new Set([
+        ...storage.listProviders(),
+        ...rotation.providers(),
+      ])
+
+      for (const providerID of knownProviders) {
+        if (activeProviders.has(providerID)) continue
+        const data = storage.read(providerID)
+        if (data?.active !== null) storage.activate(providerID, null)
+        rotation.closeAuth(providerID, at)
+      }
+    }
+
     // Start the file watcher. Captures every login to auth.json (including
     // additional accounts) without depending on plugin auth-hook composition.
     const authJsonPath = storage.getAuthJsonPath()
     const watcherKey = authJsonPath
     watcherControllers.get(watcherKey)?.stop()
     watcherControllers.set(
-      watcherKey,
-      createAuthJsonWatcher({
-        authJsonPath,
         watcherKey,
-        onChange: () => {
-          const entries = storage.readAllAuthJson()
-          for (const providerID of Object.keys(entries)) {
-            detectAccount(providerID, "watcher")
-          }
-        },
-        log: (level, message, extra) => {
-          void log(level, message, { watcherKey, ...extra })
-        },
+        createAuthJsonWatcher({
+          authJsonPath,
+          watcherKey,
+          onChange: () => {
+            reconcileAllAuth("watcher")
+          },
+          log: (level, message, extra) => {
+            void log(level, message, { watcherKey, ...extra })
+          },
       }),
     )
 
@@ -279,7 +329,7 @@ const plugin: PluginModule = {
         const providerID = hookInput.model.providerID
 
         const sessionID = hookInput.sessionID
-        rotation.track(sessionID, providerID)
+        rotation.trackRequest(sessionID, providerID)
         await debugLog("debug", "chat.params provider matched", {
           sessionID,
           provider: providerID,
@@ -316,11 +366,6 @@ const plugin: PluginModule = {
             return
           }
 
-          storage.activate(providerID, nextIdx)
-          // Don't trackAccount here — the rotated credentials won't take effect
-          // until the NEXT streamText() call. The current retry may still use
-          // the old account's cached credentials. We update trackAccount only
-          // on the normal path where the account is actually being used.
           const data = storage.read(providerID)
           if (!data) return
           const account = data.accounts[nextIdx] as storage.OAuthAccount
@@ -342,14 +387,7 @@ const plugin: PluginModule = {
           })
           await input.client.auth.set({
             path: { id: providerID },
-            body: {
-              type: "oauth",
-              refresh: account.refresh,
-              access: account.access,
-              expires: account.expires,
-              ...(account.enterpriseUrl && { enterpriseUrl: account.enterpriseUrl }),
-              ...(account.accountId && { accountId: account.accountId }),
-            } as any,
+            body: mapAuthBody(account),
           })
           await debugLog("info", "rotation auth.set completed", {
             provider: providerID,
@@ -357,20 +395,6 @@ const plugin: PluginModule = {
             index: nextIdx,
             label: account.label,
           })
-        } else {
-          // Cold-start fallback: when auth.json existed before the plugin
-          // started, no change event ever fires for it. Detect on first chat.
-          detectAccount(providerID, "chat")
-          const data = storage.read(providerID)
-          if (data) {
-            rotation.trackAccount(sessionID, data.active)
-            await debugLog("debug", "tracked active account for session", {
-              provider: providerID,
-              sessionID,
-              index: data.active,
-              label: data.accounts[data.active]?.label,
-            })
-          }
         }
       },
 
@@ -380,65 +404,82 @@ const plugin: PluginModule = {
           event.properties.status.type === "retry"
         ) {
           const { sessionID, status } = event.properties
-          const providerID = rotation.provider(sessionID)
-          const accountIdx = rotation.usedAccount(sessionID)
+          const request = rotation.request(sessionID)
           const matchesRateLimit = isRateLimitMessage(status.message)
+          const timelineMatch = request ? rotation.authAt(request.providerID, request.startedAt) : undefined
+          const resolved = timelineMatch
+            ? storage.findByFingerprint(timelineMatch.providerID, timelineMatch.fingerprint)
+            : undefined
           await debugLog("info", "retry event observed", {
             sessionID,
-            trackedProvider: providerID,
-            trackedAccountIndex: accountIdx,
+            trackedProvider: request?.providerID,
+            requestStartedAt: request?.startedAt,
+            timelineFingerprint: timelineMatch?.fingerprint,
+            timelineAccountID: timelineMatch?.accountID,
+            trackedAccountIndex: resolved?.index,
             retryMessage: status.message,
             matchesRateLimit,
           })
           if (!matchesRateLimit) {
             await debugLog("debug", "retry event ignored: message did not match rate-limit predicate", {
               sessionID,
-              trackedProvider: providerID,
+              trackedProvider: request?.providerID,
               retryMessage: status.message,
             })
             return
           }
-          if (!providerID) {
-            await debugLog("debug", "retry event ignored: session not tracked for managed provider", {
+          if (!request) {
+            await debugLog("debug", "retry event ignored: session request context missing", {
               sessionID,
-              trackedProvider: providerID,
             })
             return
           }
-          if (accountIdx === undefined) {
-            await debugLog("warn", "retry event ignored: no used account recorded", {
+          if (!timelineMatch) {
+            await debugLog("warn", "retry event ignored: no auth interval matched request time", {
               sessionID,
-              provider: providerID,
+              provider: request.providerID,
+              requestStartedAt: request.startedAt,
+              retryMessage: status.message,
+            })
+            return
+          }
+          if (!resolved) {
+            await debugLog("warn", "retry event skipped: historical account no longer maps to storage", {
+              sessionID,
+              provider: request.providerID,
+              requestStartedAt: request.startedAt,
+              fingerprint: timelineMatch.fingerprint,
+              accountID: timelineMatch.accountID,
               retryMessage: status.message,
             })
             return
           }
 
-          const data = storage.read(providerID)
-          const label = data?.accounts[accountIdx]?.label ?? `#${accountIdx}`
+          const data = storage.read(request.providerID)
+          const label = data?.accounts[resolved.index]?.label ?? `#${resolved.index}`
           await debugLog("info", "rate limit detected, exhausting account", {
-            provider: providerID,
+            provider: request.providerID,
             sessionID,
-            index: accountIdx,
+            index: resolved.index,
             label,
             message: status.message,
           })
-          storage.exhaust(providerID, accountIdx)
+          storage.exhaust(request.providerID, resolved.index)
           await debugLog("info", "account exhausted", {
-            provider: providerID,
+            provider: request.providerID,
             sessionID,
-            index: accountIdx,
+            index: resolved.index,
             label,
-            nextIdx: storage.next(providerID),
+            nextIdx: storage.next(request.providerID),
           })
-          if (storage.next(providerID) !== undefined) {
+          if (storage.next(request.providerID) !== undefined) {
             await toast("warning", `Account ${label} is rate-limited`, PLUGIN_ID)
           }
           rotation.flag(sessionID)
           await debugLog("info", "rotation flagged", {
-            provider: providerID,
+            provider: request.providerID,
             sessionID,
-            index: accountIdx,
+            index: resolved.index,
             label,
           })
         }

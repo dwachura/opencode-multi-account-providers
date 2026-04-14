@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./server": "./index.ts"
+    "./server": "./index.ts",
+    "./tui": "./tui.ts"
   },
   "engines": {
     "opencode": ">=1.3.0"
