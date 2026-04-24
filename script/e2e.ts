@@ -86,13 +86,17 @@ function requireState(): State {
 }
 
 function getClient(state: State) {
-  return createOpencodeClient({ baseUrl: state.opencodeBase })
+  return createOpencodeClient({ baseUrl: state.opencodeBase, directory: PROJECT_ROOT })
 }
 
 async function ensureOpencodeAvailable(state: State) {
+  const client = getClient(state)
   try {
     const res = await fetch(`${state.opencodeBase}/session`)
-    if (res.ok) return
+    if (!res.ok) throw new Error(`unexpected status ${res.status}`)
+    const auth = await client.provider.auth({})
+    const methods = (auth.data ?? {})[PROVIDER_ID] ?? []
+    if (methods.some((method) => method.type === "oauth")) return
   } catch {}
   throw new Error(`OpenCode TUI is not reachable at ${state.opencodeBase}. Restart it with \`bun run e2e:tui\`.`)
 }
@@ -219,6 +223,29 @@ async function listUsers(state: State): Promise<User[]> {
   return fetchJson<User[]>(`${state.fakeBase}/admin/users`)
 }
 
+function toOAuthAccount(user: User): storage.OAuthAccount {
+  return {
+    id: user.access_token ?? user.id,
+    label: user.id,
+    type: "oauth",
+    access: user.access_token ?? user.id,
+    refresh: user.refresh_token ?? user.id,
+    expires: user.token_expires,
+    ...(user.account_id && { accountId: user.account_id }),
+  }
+}
+
+async function resolveFreshAccount(state: State, account: storage.OAuthAccount): Promise<storage.OAuthAccount> {
+  const users = await listUsers(state)
+  const match = users.find((user) =>
+    user.access_token === account.access
+      || (account.accountId && user.account_id === account.accountId)
+      || user.id === account.label
+      || user.id === account.id,
+  )
+  return match ? toOAuthAccount(match) : account
+}
+
 function resolveUser(users: User[], input: string): User {
   const key = input.toLowerCase()
   const match = users.find(
@@ -294,6 +321,39 @@ async function setLiveAuth(state: State, account: storage.OAuthAccount) {
   })
 }
 
+async function syncLiveAuth(state: State, account: storage.OAuthAccount, attempts = 3) {
+  let lastError: unknown
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      await setLiveAuth(state, account)
+      await waitForAuthJsonEntry(
+        state,
+        (entry) => entry?.access === account.access && entry?.refresh === account.refresh,
+        3_000,
+      )
+      return
+    } catch (error) {
+      lastError = error
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+}
+
+async function waitForAuthJsonEntry(
+  state: State,
+  predicate: (entry: storage.OAuthAuthEntry | undefined) => boolean,
+  timeoutMs = 5_000,
+) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const entry = storage.readAuthJson(PROVIDER_ID)
+    if (predicate(entry)) return entry
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error("Timed out waiting for auth.json reconciliation")
+}
+
 async function removeLiveAuth(state: State) {
   const client = getClient(state)
   await client.auth.remove({ providerID: PROVIDER_ID })
@@ -315,32 +375,26 @@ async function addAccount(input: string, initialReqLimitInput?: string) {
   if (initialReqLimitInput !== undefined && !Number.isFinite(initialReqLimit)) {
     throw new Error("initialReqLimit must be a number")
   }
-  const user = await ensureUser(state, input, initialReqLimit)
+  const label = normalizeLabel(input)
   configureStorage(state)
   const beforeData = storage.read(PROVIDER_ID)
   const before = beforeData?.accounts.length ?? 0
   const previousActive = beforeData?.active === null || beforeData?.active === undefined
     ? undefined
     : beforeData?.accounts[beforeData.active] as storage.OAuthAccount | undefined
-  const nextAccount: storage.OAuthAccount = {
-    id: user.id,
-    label: user.id,
-    type: "oauth",
-    access: user.access_token ?? user.id,
-    refresh: user.refresh_token ?? user.id,
-    expires: user.token_expires,
-    ...(user.account_id && { accountId: user.account_id }),
-  }
+  const user = await ensureUser(state, label, initialReqLimit)
+  const nextAccount = toOAuthAccount(user)
 
-  await setLiveAuth(state, nextAccount)
+  await syncLiveAuth(state, nextAccount)
   await waitForStoredAccount(() => {
     const data = storage.read(PROVIDER_ID)
     return (data?.accounts.length ?? 0) > before || data?.accounts.some((account) => (account as storage.OAuthAccount).id === nextAccount.id) === true
   })
 
   if (previousActive && storage.fingerprint(previousActive) !== storage.fingerprint(nextAccount)) {
-    await setLiveAuth(state, previousActive)
-    await waitForStoredAccount(() => storage.read(PROVIDER_ID)?.active === findActiveIndex(PROVIDER_ID, previousActive))
+    const restoredAccount = await resolveFreshAccount(state, previousActive)
+    await syncLiveAuth(state, restoredAccount)
+    await waitForStoredAccount(() => storage.read(PROVIDER_ID)?.active === findActiveIndex(PROVIDER_ID, restoredAccount))
   }
 
   const afterData = storage.read(PROVIDER_ID)
@@ -418,28 +472,23 @@ async function removeAccount(input: string) {
     throw new Error(`Account not found: ${input}`)
   }
 
-  const removed = data.accounts[index] as storage.OAuthAccount
-  const accounts = data.accounts.filter((_, i) => i !== index)
-  const exhausted = data.exhausted
-    .filter((i) => i !== index)
-    .map((i) => (i > index ? i - 1 : i))
-  const active = accounts.length === 0 ? 0 : index < data.active ? data.active - 1 : Math.min(data.active, accounts.length - 1)
-
-  storage.write(PROVIDER_ID, { active, accounts, exhausted })
-
-  if (accounts.length > 0 && data.active === index) {
-    const next = accounts[active] as storage.OAuthAccount
-    await setLiveAuth(state, next)
+  const result = storage.remove(PROVIDER_ID, index)
+  if (result.status !== "removed") {
+    throw new Error(`Could not remove account: ${input}`)
   }
 
-  if (accounts.length === 0 && data.active === index) {
+  if (result.remainingCount > 0 && result.removedWasActive && result.nextActive) {
+    const next = await resolveFreshAccount(state, result.nextActive)
+    await syncLiveAuth(state, next)
+    await waitForStoredAccount(() => storage.read(PROVIDER_ID)?.active === findActiveIndex(PROVIDER_ID, next))
+  }
+
+  if (result.remainingCount === 0 && result.removedWasActive) {
     await removeLiveAuth(state)
+    await waitForAuthJsonEntry(state, (entry) => entry === undefined)
   }
 
-  console.log(`Removed account ${(removed as storage.OAuthAccount).id}`)
-  await fetch(`${state.fakeBase}/admin/users/${encodeURIComponent((removed as storage.OAuthAccount).id)}`, {
-    method: "DELETE",
-  }).catch(() => undefined)
+  console.log(`Removed account ${result.removed.id}`)
 }
 
 async function setLimit(userInput: string, reqLimitInput: string, tokLimitInput?: string) {

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test"
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import * as storage from "../src/storage"
@@ -11,6 +11,7 @@ import plugin from "../src/index"
 let testDir: string
 let authSetCalls: Array<{ path: { id: string }; body: any }>
 let toastCalls: Array<{ variant: string; message: string; title?: string }>
+let logCalls: Array<{ level: string; message: string; extra: Record<string, unknown> | undefined }>
 let mockClient: any
 
 beforeEach(() => {
@@ -19,14 +20,30 @@ beforeEach(() => {
   rotation.reset()
   authSetCalls = []
   toastCalls = []
+  logCalls = []
   mockClient = {
     auth: {
       set: mock(async (args: any) => {
         authSetCalls.push(args)
+        const authJsonPath = join(testDir, "auth.json")
+        const current = existsSync(authJsonPath)
+          ? JSON.parse(readFileSync(authJsonPath, "utf-8")) as Record<string, unknown>
+          : {}
+        current[args.path.id] = args.body
+        writeFileSync(authJsonPath, JSON.stringify(current))
+        const data = storage.read(args.path.id)
+        const index = data?.accounts.findIndex(
+          (account) => account.type === "oauth"
+            && account.access === args.body.access
+            && account.refresh === args.body.refresh,
+        ) ?? -1
+        if (index !== -1) storage.activate(args.path.id, index)
       }),
     },
     app: {
-      log: mock(async () => {}),
+      log: mock(async (args: { body: { level: string; message: string; extra?: Record<string, unknown> } }) => {
+        logCalls.push(args.body)
+      }),
     },
     tui: {
       showToast: mock(async (args: { body: { variant: string; message: string; title?: string } }) => {
@@ -90,6 +107,16 @@ const oauthB: storage.OAuthAccount = {
   accountId: "acct_b",
 }
 
+const oauthC: storage.OAuthAccount = {
+  id: "user_c",
+  label: "openai",
+  type: "oauth",
+  access: "access-c",
+  refresh: "refresh-c",
+  expires: Date.now() + 3600_000,
+  accountId: "acct_c",
+}
+
 function chatParamsInput(sessionID: string, providerID: string) {
   return {
     sessionID,
@@ -97,6 +124,18 @@ function chatParamsInput(sessionID: string, providerID: string) {
     agent: {} as any,
     provider: {} as any,
     message: {} as any,
+  }
+}
+
+function retryEvent(sessionID: string, message: string) {
+  return {
+    event: {
+      type: "session.status" as const,
+      properties: {
+        sessionID,
+        status: { type: "retry" as const, attempt: 1, message, next: 2000 },
+      },
+    },
   }
 }
 
@@ -387,10 +426,11 @@ describe("chat.params — rotation", () => {
     expect(authSetCalls[0].path.id).toBe("openai")
     expect(authSetCalls[0].body.type).toBe("oauth")
     expect(authSetCalls[0].body.refresh).toBe("refresh-b")
-    expect(storage.read("openai")!.active).toBe(0)
+    await waitFor(() => storage.read("openai")!.active === 1)
+    expect(storage.read("openai")!.active).toBe(1)
   })
 
-  test("no-op when all accounts exhausted", async () => {
+  test("throws when all accounts are exhausted", async () => {
     storage.add("openai", oauthA)
     storage.add("openai", oauthB)
     storage.exhaust("openai", 0)
@@ -399,7 +439,7 @@ describe("chat.params — rotation", () => {
     const hooks = await createHooks("openai")
     rotation.flag("s3")
 
-    await runChatParams(hooks, "s3", "openai")
+    await expect(runChatParams(hooks, "s3", "openai")).rejects.toThrow('All accounts for "openai" are rate-limited')
 
     expect(authSetCalls).toHaveLength(0)
   })
@@ -426,18 +466,6 @@ describe("chat.params — rotation", () => {
 // ── event: rate limit detection ──
 
 describe("event — rate limit detection", () => {
-  function retryEvent(sessionID: string, message: string) {
-    return {
-      event: {
-        type: "session.status" as const,
-        properties: {
-          sessionID,
-          status: { type: "retry" as const, attempt: 1, message, next: 2000 },
-        },
-      },
-    }
-  }
-
   test("flags rotation on 'Rate Limited'", async () => {
     storage.add("openai", oauthA)
     storage.add("openai", oauthB)
@@ -542,6 +570,38 @@ describe("event — rate limit detection", () => {
     expect(toastCalls.some((toast) => toast.variant === "warning")).toBe(false)
     expect(rotation.consume("s16")).toBe(true)
   })
+
+  test("ignores retry event when no auth interval matched request time", async () => {
+    storage.add("openai", oauthA)
+    storage.activate("openai", 0)
+    rotation.openAuth("openai", oauthA.id, storage.fingerprint(oauthA), 200)
+
+    const hooks = await createHooks("openai")
+    rotation.trackRequest("s17", "openai", 150)
+
+    await hooks.event!(retryEvent("s17", "Rate Limited"))
+
+    expect(storage.read("openai")!.exhausted).toEqual([])
+    expect(rotation.consume("s17")).toBe(false)
+    expect(logCalls.some((entry) => entry.message === "retry event ignored: no auth interval matched request time")).toBe(true)
+  })
+
+  test("skips retry attribution when historical account no longer maps to storage", async () => {
+    storage.add("openai", oauthA)
+    storage.activate("openai", 0)
+    const fingerprint = storage.fingerprint(oauthA)
+    rotation.openAuth("openai", oauthA.id, fingerprint, 100)
+    storage.remove("openai", 0)
+
+    const hooks = await createHooks("openai")
+    rotation.trackRequest("s18", "openai", 150)
+
+    await hooks.event!(retryEvent("s18", "Rate Limited"))
+
+    expect(storage.read("openai")).toBeUndefined()
+    expect(rotation.consume("s18")).toBe(false)
+    expect(logCalls.some((entry) => entry.message === "retry event skipped: historical account no longer maps to storage")).toBe(true)
+  })
 })
 
 // ── Full rotation flow ──
@@ -578,7 +638,8 @@ describe("end-to-end rotation flow", () => {
 
     expect(authSetCalls).toHaveLength(1)
     expect(authSetCalls[0].body.refresh).toBe("refresh-b")
-    expect(storage.read("openai")!.active).toBe(0)
+    await waitFor(() => storage.read("openai")!.active === 1)
+    expect(storage.read("openai")!.active).toBe(1)
   })
 
   test("shows terminal error toast when all accounts are exhausted", async () => {
@@ -599,7 +660,7 @@ describe("end-to-end rotation flow", () => {
       },
     })
 
-    await runChatParams(hooks, "flow-2", "openai")
+    await expect(runChatParams(hooks, "flow-2", "openai")).rejects.toThrow('All accounts for "openai" are rate-limited')
 
     expect(toastCalls.some((toast) => toast.variant === "warning")).toBe(false)
     expect(
@@ -607,5 +668,50 @@ describe("end-to-end rotation flow", () => {
         (toast) => toast.variant === "error" && toast.message === 'All accounts for "openai" are rate-limited',
       ),
     ).toBe(true)
+  })
+
+  test("reset exhausted account can rotate back in and become exhausted again", async () => {
+    storage.add("openai", oauthA)
+    storage.add("openai", oauthB)
+    storage.add("openai", oauthC)
+    storage.activate("openai", 0)
+    rotation.openAuth("openai", oauthA.id, storage.fingerprint(oauthA), 0)
+
+    const hooks = await createHooks("openai")
+
+    rotation.trackRequest("flow-3", "openai", 100)
+    await hooks.event!(retryEvent("flow-3", "Rate Limited"))
+    await runChatParams(hooks, "flow-3", "openai")
+    expect(authSetCalls[0].body.refresh).toBe("refresh-b")
+
+    storage.activate("openai", 1)
+    rotation.openAuth("openai", oauthB.id, storage.fingerprint(oauthB), 200)
+
+    rotation.trackRequest("flow-4", "openai", 250)
+    await hooks.event!(retryEvent("flow-4", "Rate Limited"))
+    await runChatParams(hooks, "flow-4", "openai")
+    expect(authSetCalls[1].body.refresh).toBe("refresh-c")
+
+    storage.activate("openai", 2)
+    rotation.openAuth("openai", oauthC.id, storage.fingerprint(oauthC), 300)
+
+    rotation.trackRequest("flow-5", "openai", 350)
+    await hooks.event!(retryEvent("flow-5", "Rate Limited"))
+    expect(storage.read("openai")!.exhausted).toEqual([0, 1, 2])
+
+    storage.reset("openai", [1])
+    expect(storage.read("openai")!.exhausted).toEqual([0, 2])
+
+    await runChatParams(hooks, "flow-5", "openai")
+    expect(authSetCalls[2].body.refresh).toBe("refresh-b")
+
+    storage.activate("openai", 1)
+    rotation.openAuth("openai", oauthB.id, storage.fingerprint(oauthB), 400)
+
+    rotation.trackRequest("flow-6", "openai", 450)
+    await hooks.event!(retryEvent("flow-6", "Rate Limited"))
+
+    expect(storage.read("openai")!.exhausted.toSorted((a, b) => a - b)).toEqual([0, 1, 2])
+    expect(rotation.consume("flow-6")).toBe(true)
   })
 })

@@ -61,6 +61,30 @@ function mapAuthBody(account: storage.OAuthAccount) {
   } as any
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitForActiveAccountFingerprint(
+  providerID: string,
+  fingerprint: string,
+  timeoutMs = 5_000,
+  intervalMs = 100,
+) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const data = storage.read(providerID)
+    if (data && data.active !== null) {
+      const account = data.accounts[data.active] as storage.OAuthAccount | undefined
+      if (account && storage.fingerprint(account) === fingerprint) {
+        return { data, index: data.active, account }
+      }
+    }
+    await sleep(intervalMs)
+  }
+  return undefined
+}
+
 // ── auth.json file watcher ──
 //
 // Captures every change to auth.json and registers the new account in
@@ -354,16 +378,17 @@ const plugin: PluginModule = {
             nextIdx,
           })
           if (nextIdx === undefined) {
+            const message = `All accounts for "${providerID}" are rate-limited`
             await debugLog("warn", "all accounts exhausted, cannot rotate", {
               provider: providerID,
               sessionID,
             })
             await toast(
               "error",
-              `All accounts for "${providerID}" are rate-limited`,
+              message,
               PLUGIN_ID,
             )
-            return
+            throw new Error(message)
           }
 
           const data = storage.read(providerID)
@@ -389,12 +414,26 @@ const plugin: PluginModule = {
             path: { id: providerID },
             body: mapAuthBody(account),
           })
+          const reconciled = await waitForActiveAccountFingerprint(
+            providerID,
+            storage.fingerprint(account),
+          )
           await debugLog("info", "rotation auth.set completed", {
             provider: providerID,
             sessionID,
             index: nextIdx,
             label: account.label,
+            reconciled: !!reconciled,
+            reconciledIndex: reconciled?.index,
           })
+          if (!reconciled) {
+            await debugLog("warn", "rotation auth.set completed before storage reconciliation", {
+              provider: providerID,
+              sessionID,
+              index: nextIdx,
+              label: account.label,
+            })
+          }
         }
       },
 

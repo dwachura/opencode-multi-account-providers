@@ -15,8 +15,36 @@
  * on the next request.
  */
 import type { PluginModule } from "@opencode-ai/plugin"
+import { readFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
 
 const FAKE_OAUTH_BASE_URL = process.env.FAKE_OAUTH_BASE_URL
+
+function authJsonPath() {
+  return join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "auth.json")
+}
+
+function readFakeOAuthAuth() {
+  try {
+    const parsed = JSON.parse(readFileSync(authJsonPath(), "utf-8")) as Record<string, unknown>
+    const entry = parsed.fake
+    if (!entry || typeof entry !== "object") return undefined
+    const auth = entry as Record<string, unknown>
+    if (auth.type !== "oauth") return undefined
+    if (typeof auth.access !== "string" || typeof auth.refresh !== "string" || typeof auth.expires !== "number") {
+      return undefined
+    }
+    return {
+      type: "oauth" as const,
+      access: auth.access,
+      refresh: auth.refresh,
+      expires: auth.expires,
+    }
+  } catch {
+    return undefined
+  }
+}
 
 const plugin: PluginModule = {
   id: "fake-auth-plugin",
@@ -25,14 +53,16 @@ const plugin: PluginModule = {
       auth: {
         provider: "fake",
         async loader(getAuth) {
+          const initialAuth = readFakeOAuthAuth() ?? await getAuth()
           return {
-            // Dummy key — the fetch wrapper overrides the Authorization header
-            // when OAuth credentials exist. Keeping this present avoids the
-            // OpenAI provider rejecting requests before the interactive harness
-            // has written the first auth.json entry.
-            apiKey: "fake-oauth-dummy",
+            // Some runtimes honor the custom fetch wrapper, others only use the
+            // returned apiKey. When OAuth auth is present, expose the current
+            // access token both ways so the fake provider stays usable.
+            apiKey: initialAuth.type === "oauth"
+              ? initialAuth.access
+              : "fake-oauth-dummy",
             async fetch(requestInput: RequestInfo | URL, init?: RequestInit) {
-              const currentAuth = await getAuth()
+              const currentAuth = readFakeOAuthAuth() ?? await getAuth()
               if (currentAuth.type !== "oauth") return fetch(requestInput, init)
 
               const headers = new Headers()

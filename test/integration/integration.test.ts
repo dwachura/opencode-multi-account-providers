@@ -374,6 +374,63 @@ describe("oauth rotation on rate limit", () => {
     expect(multiAuth.exhausted).toContain(0)
     expect(multiAuth.active).toBe(1)
   })
+
+  test("fails fast when all accounts are exhausted", async () => {
+    const expires = Date.now() + 3600_000
+
+    await setServerTokens("user-a", "oa-alice", "or-alice", expires)
+    await setServerTokens("user-b", "oa-bob", "or-bob", expires)
+    await setServerLimits("user-a", 2)
+    await setServerLimits("user-b", 1)
+
+    writeMultiAuth([
+      {
+        id: "oa-alice",
+        label: PROVIDER_ID,
+        type: "oauth",
+        access: "oa-alice",
+        refresh: "or-alice",
+        expires,
+        accountId: "acct_alice",
+      },
+      {
+        id: "oa-bob",
+        label: PROVIDER_ID,
+        type: "oauth",
+        access: "oa-bob",
+        refresh: "or-bob",
+        expires,
+        accountId: "acct_bob",
+      },
+    ])
+
+    writeOAuthAuth("oa-alice", "or-alice", expires, "acct_alice")
+
+    const session = await client.session.create()
+    const sessionID = session.data!.id
+
+    await sendPrompt(sessionID, "first message")
+    await sendPrompt(sessionID, "second message")
+    await sendPrompt(sessionID, "third message")
+    await waitFor(() => {
+      const data = readMultiAuth()
+      return data?.active === 1 && data.exhausted.includes(0)
+    })
+
+    const startedAt = Date.now()
+    const result = await sendPrompt(sessionID, "fourth message")
+    expect(Date.now() - startedAt).toBeLessThan(10_000)
+    expect(result.data?.info?.error?.data?.message).toBe('All accounts for "fake" are rate-limited')
+
+    await waitFor(() => {
+      const data = readMultiAuth()
+      return data?.active === 1 && data.exhausted.includes(0) && data.exhausted.includes(1)
+    })
+
+    const bob = await getServerUser("user-b")
+    expect(bob.req_used).toBe(1)
+  })
+
 })
 
 describe("single account passthrough", () => {

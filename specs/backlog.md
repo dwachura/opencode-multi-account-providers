@@ -8,8 +8,8 @@ Open findings:
 
 - TUI plugin config discovery did not match server-side config discovery
 - external TUI plugin loading is stricter than server plugin loading; server-only helper plugins still need a `tui()` export
-- helper-side fake-account mutations can leave live OpenCode auth state, `auth.json`, and watcher-derived storage out of sync
-- fake-provider prompts in the interactive harness still sometimes reach the fake server as `Invalid credentials`
+- helper-side fake-account mutations were hardened to use auth APIs plus reconciliation waits, but the live interactive prompt path still needs more work
+- fake-provider prompts in the interactive harness still do not reliably use OAuth auth from the fake auth plugin during real prompt execution
 
 Desired end state:
 

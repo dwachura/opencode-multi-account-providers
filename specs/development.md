@@ -74,9 +74,9 @@ Findings so far:
 
 - the TUI runtime only started loading external TUI plugins after writing `tui.json` into the XDG config path, not just the local config dir
 - the fake auth plugin also needed a no-op `tui` entrypoint; without it, TUI plugin loading logged an error before the real plugin loaded
-- helper commands that mutate the fake environment cannot rely on rewriting `auth.json` alone; live OpenCode auth state and watcher reconciliation can diverge
-- helper commands also cannot assume a fixed local OpenCode port; stale or not-yet-ready local servers caused false failures and reconciliation timeouts
-- even after fixing config-path and startup-port issues, the interactive harness still reproduced cases where fake-provider requests hit the fake server with invalid credentials
+- helper commands now drive auth changes through the OpenCode auth API, wait for auth/storage reconciliation, pin to the project directory, and no longer delete fake users on local account removal
+- helper commands also now wait for the local OpenCode server/provider auth APIs to be ready instead of assuming an immediately usable startup state
+- remaining blocker: in the interactive CLI runtime, fake-provider prompts still do not consistently honor the fake auth plugin's OAuth request auth, so prompt traffic can still fall back to missing/dummy API-key auth instead of the OAuth access token
 
 Current implication:
 

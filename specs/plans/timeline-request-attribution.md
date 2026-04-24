@@ -1,5 +1,13 @@
 # Timeline-Based Request Attribution
 
+Status: implemented.
+
+Notes:
+
+- server-side auth switches now wait for reconciled storage state
+- automated coverage includes real integration coverage for terminal all-accounts-exhausted behavior
+- related findings/status notes: `specs/findings/timeline-request-attribution-test-findings.md`
+
 ## Goal
 
 Replace session-level account guesswork with time-based correlation:
