@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.npm/
+.bun/
+
+# Build and test output
+dist/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+bun-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Package artifacts
+*.tgz
+bun.lockb
+
+# Tool caches
+.eslintcache
+.cache/
+.turbo/
+.vite/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

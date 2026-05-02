@@ -1124,8 +1124,8 @@ OpenCode SDK/app context:
 
 ## Related Docs
 
-- `specs/architecture.md`
-- `specs/development.md`
-- `specs/plans/provider-accounts-command.md`
-- `specs/plans/timeline-request-attribution.md`
-- `specs/backlog.md`
+- `README.md`
+- `specs/decisions/001-plugin-runtime-split.md`
+- `specs/backlog/README.md`
+- `specs/findings/opencode-retry-mechanism.md`
+- `specs/findings/openai-api-rate-limitting.md`
