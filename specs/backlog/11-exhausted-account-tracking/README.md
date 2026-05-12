@@ -12,7 +12,7 @@ An account can remain connected but temporarily unsuitable for automatic continu
 
 ## Scope
 
-- Mark an account exhausted by provider ID and fingerprint.
+- Mark an account exhausted by row id or `(provider, account_id)`.
 - Store optional exhaustion metadata such as reason, source event, and timestamp.
 - Exclude exhausted accounts from automatic rotation candidate selection.
 - Keep exhausted accounts visible and manually manageable.
@@ -33,15 +33,15 @@ An account can remain connected but temporarily unsuitable for automatic continu
 
 - Given a stored account is marked exhausted, then inventory shows it as exhausted.
 - Given rotation scans accounts, then exhausted accounts are skipped.
-- Given the same account credentials refresh, then exhausted state remains attached to the same fingerprint.
+- Given the same account credentials refresh, then exhausted state remains attached to the same account row.
 - Given an account is removed, then its exhausted state is removed too.
 - Given all accounts are exhausted, then rotation reports no usable candidate.
 
 ## Implementation Notes
 
 - Exhaustion is plugin policy state, not auth state.
-- Store by fingerprint to survive order changes.
-- Consider storing `exhausted_at` and `reason` now for later UX, even if initially unused.
+- Store exhaustion on the `accounts` row.
+- `exhausted_at` is already part of the storage schema; reason can be added later if needed.
 
 ## Open Questions
 

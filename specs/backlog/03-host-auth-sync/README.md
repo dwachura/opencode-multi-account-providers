@@ -27,14 +27,14 @@ OpenCode auth APIs mutate live auth asynchronously from plugin-visible storage. 
 
 ## Dependencies
 
-- Shared persistent storage.
+- Server persistent storage.
 - Provider identity extraction.
 - Account deduplication path.
 
 ## Acceptance Criteria
 
 - Given OpenCode auth changes outside the plugin, when the watcher observes `auth.json`, then plugin storage reconciles to the new active account.
-- Given `auth.set(...)` returns, when synced storage does not yet show the expected fingerprint, then the flow waits rather than reporting success immediately.
+- Given `auth.set(...)` returns, when synced storage does not yet show the expected account id, then the flow waits rather than reporting success immediately.
 - Given provider auth disappears, when reconciliation runs, then active state is cleared without deleting stored historical accounts by default.
 - Given `auth.json` is temporarily unreadable or partially written, then the watcher retries without corrupting storage.
 - Given an unsupported auth entry appears, then the plugin skips capture and records no unsafe account.
@@ -43,7 +43,7 @@ OpenCode auth APIs mutate live auth asynchronously from plugin-visible storage. 
 
 - Cache file reads by mtime to avoid unnecessary parsing.
 - Centralize reconciliation so startup scan and watcher events follow identical rules.
-- Expose `waitForActiveFingerprint(providerID, fingerprint, timeout)` for switching and rotation flows.
+- Expose `waitForActiveAccount(provider, accountID, timeout)` for switching and rotation flows.
 - Maintain runtime auth timeline from reconciliation events for attribution stories.
 
 ## Open Questions

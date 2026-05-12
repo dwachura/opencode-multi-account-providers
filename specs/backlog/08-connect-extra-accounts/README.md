@@ -43,7 +43,7 @@ OpenCode provider OAuth normally leaves the newly authenticated account as live 
 ## Implementation Notes
 
 - Treat OAuth completion and capture as separate from activation policy.
-- Preserve the previous active fingerprint before starting OAuth.
+- Preserve the previous active account id before starting OAuth.
 - Use reconciliation wait rather than directly reading the OAuth callback result as final storage truth.
 
 ## Open Questions

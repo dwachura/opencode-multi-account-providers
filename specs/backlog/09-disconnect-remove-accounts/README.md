@@ -15,7 +15,7 @@ Removing an inactive account is local storage work, but removing the active or l
 - Remove inactive stored accounts without changing live auth.
 - Remove active account and choose deterministic fallback when another account remains.
 - Remove last account and call `auth.remove(...)` for that provider.
-- Remap order and exhausted state after deletion.
+- Delete row-local exhausted state with the account.
 - Roll back local removal snapshot when required auth side effects fail.
 
 ## Out Of Scope
@@ -42,8 +42,8 @@ Removing an inactive account is local storage work, but removing the active or l
 ## Implementation Notes
 
 - Snapshot provider state before removal.
-- Fallback selection should be deterministic from ordered accounts after deletion.
-- Use fingerprint references to avoid index-shift corruption.
+- Fallback selection should be deterministic from remaining account rows after deletion.
+- Use row id or `(provider, account_id)` references to avoid index-shift corruption.
 
 ## Open Questions
 

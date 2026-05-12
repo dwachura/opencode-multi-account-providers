@@ -22,9 +22,9 @@ test("sandbox dry-run accepts released package name", async () => {
     "--dry-run",
     "--released",
     "--plugin",
-    "opencode-multi-account-providers",
+    "opencode-auth-pool",
   ])
   const out = JSON.parse(stdout)
 
-  assert.equal(out.plugin, "opencode-multi-account-providers")
+  assert.equal(out.plugin, "opencode-auth-pool")
 })

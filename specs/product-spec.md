@@ -27,7 +27,7 @@ The product is best understood as six user-facing areas:
 Current scope:
 
 - OAuth-style provider auth
-- shared multi-account storage per provider
+- server-side multi-account storage per provider
 - local TUI account management
 - automatic account rotation after rate limits
 - account identity extraction for supported providers
@@ -60,18 +60,18 @@ Overall OpenCode-driven decisions:
 3. `command.execute.before` is not a true local-command completion boundary for this feature, so `/provider-accounts` is implemented as a TUI-local command/dialog instead of a server-side slash-command path.
 4. OpenCode runtime hooks are split into phases: retry/failure information arrives through events, while next-request behavior is shaped in `chat.params`, so automatic rotation is intentionally split across those phases instead of treated as one atomic step.
 5. OpenCode auth mutation and plugin-visible synced state are not the same thing, so flows that change auth wait for synced state instead of treating API completion as final success.
-6. OpenCode/provider auth works differently across providers and does not provide one universal stable account identity for this plugin's use case, so provider-aware identity extraction and fingerprint-based joining are plugin-owned responsibilities.
+6. OpenCode/provider auth works differently across providers and does not provide one universal stable account identity for this plugin's use case, so provider-aware account identity extraction is plugin-owned responsibility.
 7. OpenCode state is scoped by directory/workspace and can change outside this plugin, so the plugin uses host auth as the external source of truth and rebuilds local account state from it instead of inventing a fully separate auth model.
 
 Core invariants this plugin must preserve:
 
-- server and TUI behavior stay separate: server handles runtime work, TUI handles local account management
+- server and TUI behavior stay separate: server handles runtime work and storage, TUI handles local account management through an explicit bridge once implemented
 - `/provider-accounts` stays local and must not send a model request
 - live auth changes go through OpenCode auth APIs, not direct `auth.json` writes
 - plugin storage is not treated as live auth until host auth sync confirms it
 - watcher-based sync owns auth-derived storage updates
 - account identity must be stable enough to survive token refresh and account-list changes
-- current account position is local state only and must not be used as a historical identity
+- account list position must not be used as identity
 - rotation is two-phase: retry handling marks/flags, next request setup applies auth change
 - retry blame uses the account active when the request started, not whatever is active when the retry event arrives
 - if retry attribution cannot be proven safely, the plugin skips exhaustion instead of guessing
@@ -233,24 +233,24 @@ Present the current set of stored accounts for a provider as a manageable accoun
 
 Chosen model and key decisions:
 
-- each provider is modeled as an ordered list of accounts plus `active` and `exhausted` state
-- the same stored account list is shared by server behavior and local UI behavior
-- SQLite was chosen as the persistent store for this shared account list
+- each stored account is a row in the server-side `accounts` table
+- account rows include provider, account id, access/refresh tokens, expiration timestamps, active state, exhausted state, and timestamps
+- SQLite was chosen as the persistent store for this account list
 
 Problems addressed and failure modes considered:
 
 - the plugin needs stable multi-account state, not a temporary in-memory list
-- UI actions and runtime rotation need to operate on the same account list
+- UI actions and runtime rotation need to operate on the same account list through a server-backed bridge
 
 Constraints and limitations introduced:
 
-- active and exhausted state are represented relative to ordered account positions
-- this keeps the local model compact, but historical/runtime logic cannot safely rely on positions alone
+- active and exhausted state are stored directly on each account row
+- multiple accounts can be active/selectable for the same provider
 
 OpenCode SDK/app context:
 
 - OpenCode exposes live auth state but not a native inventory of multiple stored accounts for the same provider.
-- Server and TUI plugin sides are separate, so the plugin needs one shared persistent account list that both can read and change.
+- Server and TUI plugin sides are separate, so TUI access to server-owned account storage requires an explicit bridge.
 
 ### 1.3 Account Deduplication
 
@@ -260,7 +260,7 @@ Recognize when newly observed auth belongs to an already known account instead o
 
 Chosen model and key decisions:
 
-- deduplication is based on a fingerprint derived from stable provider identity
+- deduplication is based on `(provider, account_id)` where account id comes from stable provider identity
 - re-observing the same account updates stored credentials instead of adding another row
 - token value itself is not the default production identity source
 
@@ -382,9 +382,9 @@ Make the provider's current live account obvious to the user.
 
 Chosen model and key decisions:
 
-- active account is stored directly as first-class provider state
+- selectable/active state is stored directly on each account row
 - active visibility is shown in the local account-management UI
-- a provider has either one active stored account or no active account
+- a provider can have multiple active/selectable stored accounts
 
 Problems addressed and failure modes considered:
 
@@ -460,19 +460,18 @@ Choose the next active identity when the currently active stored account is remo
 
 Chosen model and key decisions:
 
-- active fallback is computed deterministically from the remaining ordered account list
-- removal logic remaps active and exhausted references after account deletion
+- active fallback is computed deterministically from remaining account rows
+- removal deletes the account row and its row-local exhausted state
 - auth is only resynced when removal actually changes the live active account
 
 Problems addressed and failure modes considered:
 
-- index-based storage shifts after removal and can corrupt active/exhausted state if not adjusted carefully
+- index-based identity after removal would be unsafe; account ids/row ids are used instead
 - removing the active account must not leave the provider in an invalid half-active state when another account exists
 
 Constraints and limitations introduced:
 
-- correctness depends on careful index remapping after every removal
-- fallback behavior is ordering-based, not policy-rich or usage-aware
+- fallback behavior is simple and not policy-rich or usage-aware
 
 OpenCode SDK/app context:
 
@@ -750,7 +749,7 @@ Wait until account-changing operations are reflected back into synced state befo
 
 Chosen model and key decisions:
 
-- completion is confirmed by waiting for the expected account fingerprint to appear as the synced active account
+- completion is confirmed by waiting for the expected account id to appear as the synced active account
 - the same reconciliation-wait pattern is used in both server-side and TUI-side flows
 
 Problems addressed and failure modes considered:
@@ -801,7 +800,7 @@ Reduce mismatch between what the user sees, what the plugin stores, and what run
 Chosen model and key decisions:
 
 - UI actions do not assume final success until shared state reflects it
-- shared storage plus auth reconciliation is the consistency mechanism between local UI and server runtime
+- server-side storage plus auth reconciliation is the consistency mechanism between local UI intent and server runtime
 - the plugin avoids directly editing auth files for live auth mutations
 
 Problems addressed and failure modes considered:
@@ -816,7 +815,7 @@ Constraints and limitations introduced:
 OpenCode SDK/app context:
 
 - OpenCode TUI, server hooks, SDK auth APIs, and file-backed host auth sit at different layers and do not form one synchronous shared state container.
-- That layered architecture is the main reason the plugin uses shared storage plus reconciliation instead of trusting immediate local assumptions.
+- That layered architecture is the main reason the plugin uses server-side storage plus reconciliation instead of trusting immediate local assumptions.
 
 ## Chapter 5: Provider Adaptation
 
@@ -866,7 +865,7 @@ Represent one real provider account with a stable identity inside the plugin.
 Chosen model and key decisions:
 
 - stable account identity is separated from display label
-- behavioral identity is converted into a fingerprint used across storage and runtime attribution
+- behavioral identity is converted into an account id used across storage and runtime attribution
 
 Problems addressed and failure modes considered:
 
@@ -879,8 +878,8 @@ Constraints and limitations introduced:
 
 OpenCode SDK/app context:
 
-- OpenCode auth exposes credentials and some metadata, but it does not provide a cross-provider stable managed-account key suitable for account storage and historical attribution.
-- The plugin therefore had to separate display label from behavioral identity and normalize that identity into its own stable fingerprint.
+- OpenCode auth exposes credentials and some metadata, but it does not provide a stable managed-account key suitable for account storage and historical attribution.
+- The plugin therefore had to separate display label from behavioral identity and normalize that identity into provider-local `account_id`.
 
 ### 5.3 Provider-Specific Account Deduplication
 
@@ -1030,7 +1029,7 @@ Map a past request's account identity back onto the current stored account model
 
 Chosen model and key decisions:
 
-- historical account references resolve back to current storage by fingerprint
+- historical account references resolve back to current storage by account id
 - current storage position is intentionally not used as the historical join key
 
 Problems addressed and failure modes considered:
@@ -1039,12 +1038,12 @@ Problems addressed and failure modes considered:
 
 Constraints and limitations introduced:
 
-- if the historical fingerprint no longer maps to current storage, the plugin cannot safely continue attribution
+- if the historical account id no longer maps to current storage, the plugin cannot safely continue attribution
 
 OpenCode SDK/app context:
 
 - OpenCode host auth history and plugin account storage are different layers, and local account ordering can change over time.
-- That makes current array position an unsafe historical join key, which is why stable fingerprint-based resolution was chosen instead.
+- That makes current array position an unsafe historical join key, which is why stable account-id-based resolution was chosen instead.
 
 ### 6.4 Retry-To-Account Correlation
 
@@ -1101,7 +1100,7 @@ OpenCode SDK/app context:
 ## Core Product Rules
 
 - One provider may have many stored accounts.
-- One provider has at most one active account at a time.
+- One provider may have multiple active/selectable accounts at a time.
 - Exhaustion is tracked per stored account, not just per provider.
 - Auth changes must be reflected back into stored state before flows are treated as complete.
 - Rotation decisions must be attributed to the account active when the failed request started.

@@ -1,13 +1,13 @@
-# opencode-multi-account-providers
+# opencode-auth-pool
 
 Bare OpenCode plugin foundation for multi-account provider management.
 
 ## Current State
 
-- server plugin initializes and logs
+- server plugin initializes global SQLite storage and logs
 - TUI plugin registers `/provider-accounts`
 - `/provider-accounts` opens a placeholder dialog
-- no account storage, auth mutation, OAuth flow, provider integration, rate-limit detection, or account rotation yet
+- no auth mutation, OAuth flow, provider integration, rate-limit detection, or account rotation yet
 
 ## Structure
 
@@ -18,9 +18,10 @@ package-lock.json
 tsconfig.json
 scripts/opencode-sandbox.mjs
 src/server/config.ts
+src/server/db.ts
 src/server/index.ts
 src/server/logger.ts
-src/shared/types.ts
+src/shared/constants.ts
 src/tui/constants.ts
 src/tui/index.tsx
 src/tui/provider-accounts.tsx
@@ -76,7 +77,7 @@ Local package config uses an absolute `file://` URL in both OpenCode config file
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["file:///absolute/path/to/opencode-multi-account-providers"]
+  "plugin": ["file:///absolute/path/to/opencode-auth-pool"]
 }
 ```
 
@@ -85,7 +86,7 @@ Local package config uses an absolute `file://` URL in both OpenCode config file
 ```jsonc
 {
   "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["file:///absolute/path/to/opencode-multi-account-providers"]
+  "plugin": ["file:///absolute/path/to/opencode-auth-pool"]
 }
 ```
 
@@ -94,7 +95,7 @@ Released package config uses the npm package name in both files.
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-multi-account-providers"]
+  "plugin": ["opencode-auth-pool"]
 }
 ```
 
@@ -107,11 +108,29 @@ Plugin options use OpenCode's plugin tuple syntax:
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [["opencode-multi-account-providers", { "logLevel": "info" }]]
+  "plugin": [["opencode-auth-pool", { "logLevel": "info" }]]
 }
 ```
 
 `logLevel` controls plugin-emitted OpenCode app log severity. Default: `info`. Valid values: `debug`, `info`, `warn`, `error`.
+
+## Storage
+
+The server entrypoint initializes a SQLite database at:
+
+```txt
+<OpenCode global data dir>/plugins/opencode-auth-pool/db.sqlite
+```
+
+On Linux/XDG this resolves under:
+
+```txt
+${XDG_DATA_HOME:-~/.local/share}/opencode/plugins/opencode-auth-pool/db.sqlite
+```
+
+The database currently contains one table, `accounts`, for signed-in provider accounts. Accounts are deduped by `(provider, account_id)`. Multiple accounts can be active for the same provider, and exhausted state is independent from active state.
+
+Database access currently lives in the server entrypoint only: `src/server/db.ts`. The TUI plugin is a separate OpenCode runtime and does not directly import or call server DB functions.
 
 ## Sandbox Smoke Test
 
@@ -126,7 +145,7 @@ Useful variants:
 
 ```sh
 bun run opencode:sandbox -- --dry-run
-bun run opencode:sandbox -- --released --plugin opencode-multi-account-providers
+bun run opencode:sandbox -- --released --plugin opencode-auth-pool
 bun run opencode:sandbox -- --opencode /custom/bin/opencode
 bun run opencode:sandbox -- --keep
 ```
@@ -141,5 +160,6 @@ It removes common provider API environment variables.
 
 - `specs/product-spec.md`
 - `specs/decisions/001-plugin-runtime-split.md`
+- `specs/decisions/002-server-persistent-storage.md`
 - `specs/backlog/README.md`
 - `specs/findings/`

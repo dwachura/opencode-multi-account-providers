@@ -37,14 +37,14 @@ Account management is local plugin state and host auth coordination. It should n
 - Given the user invokes `/provider-accounts`, then no model request is sent.
 - Given accounts exist, then the TUI lists them with label, active state, and exhausted state.
 - Given no accounts exist, then the TUI shows an empty state and connect action.
-- Given an action completes, then the TUI refreshes from shared storage rather than stale local assumptions.
+- Given an action completes, then the TUI refreshes through a server-backed bridge rather than stale local assumptions.
 - Given an action fails or times out, then the TUI shows a clear local error.
 
 ## Implementation Notes
 
 - Keep the command TUI-local because server `command.execute.before` is not the right completion boundary.
-- Reuse shared domain services; avoid embedding storage mutations in UI components.
-- Refresh after each mutation through shared inventory read.
+- Avoid embedding storage mutations in UI components.
+- Refresh after each mutation through server-backed inventory read once the bridge exists.
 
 ## Open Questions
 

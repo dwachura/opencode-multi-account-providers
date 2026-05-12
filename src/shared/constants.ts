@@ -1,1 +1,1 @@
-export const PLUGIN_ID = "opencode-multi-account-providers"
+export const PLUGIN_ID = "opencode-auth-pool"

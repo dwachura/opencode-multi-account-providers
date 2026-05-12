@@ -15,7 +15,7 @@ Provider auth payloads differ and raw token values can change. The plugin needs 
 - Define a provider adapter registry keyed by OpenCode provider ID.
 - Define a normalized identity result with stable `id`, display `label`, and optional metadata.
 - Implement strict OpenAI identity extraction using `chatgpt_account_user_id`.
-- Convert provider identity into a stable plugin fingerprint.
+- Convert provider identity into a stable `account_id` for storage.
 - Return explicit unsupported/weak identity results when extraction is unsafe.
 
 ## Out Of Scope
@@ -31,8 +31,8 @@ Provider auth payloads differ and raw token values can change. The plugin needs 
 
 ## Acceptance Criteria
 
-- Given an OpenAI OAuth auth payload with `chatgpt_account_user_id`, when identity extraction runs, then it returns a stable id and fingerprint.
-- Given the same account has refreshed credentials, when extraction runs again, then it returns the same fingerprint.
+- Given an OpenAI OAuth auth payload with `chatgpt_account_user_id`, when identity extraction runs, then it returns a stable account id.
+- Given the same account has refreshed credentials, when extraction runs again, then it returns the same account id.
 - Given unsupported provider auth, when extraction runs, then it returns a safe unsupported result instead of guessing.
 - Given a provider adapter supplies a label, when the account is listed, then the label is usable for display but not used as behavior identity.
 - Given extraction fails, downstream capture and attribution skip unsafe mutation.
@@ -40,7 +40,7 @@ Provider auth payloads differ and raw token values can change. The plugin needs 
 ## Implementation Notes
 
 - Keep provider-specific code narrow and explicit.
-- Fingerprint should include provider ID plus stable provider account id to avoid cross-provider collisions.
+- Storage deduplication uses `(provider, account_id)`, so account id only needs to be stable within the provider.
 - Treat label as UI-only metadata.
 - Avoid generic fallback until the config/fallback story enables it explicitly.
 

@@ -12,9 +12,9 @@ Stored accounts are only useful if the user can intentionally make one account l
 
 ## Scope
 
-- Select a stored account by provider ID and fingerprint.
+- Select a stored account by provider and account id.
 - Write that account's OAuth credentials through `auth.set(...)`.
-- Wait for host auth sync to confirm the expected active fingerprint.
+- Wait for host auth sync to confirm the expected account id.
 - Report timeout or mismatch as unconfirmed switch.
 - Define switching as affecting subsequent requests only.
 
@@ -34,14 +34,14 @@ Stored accounts are only useful if the user can intentionally make one account l
 ## Acceptance Criteria
 
 - Given a stored inactive account, when the user sets it active, then `auth.set(...)` is called with that account's credentials.
-- Given auth sync confirms the account fingerprint, then the switch is reported successful.
+- Given auth sync confirms the account id, then the switch is reported successful.
 - Given auth sync times out, then the switch is reported as unconfirmed and local active state is not falsely changed.
-- Given the requested fingerprint does not exist, then no auth mutation is attempted.
+- Given the requested account id does not exist, then no auth mutation is attempted.
 - Given a request is already in flight, then the switch only applies to later requests.
 
 ## Implementation Notes
 
-- Expose a shared `setActiveAccount(providerID, fingerprint)` service usable by TUI and rotation.
+- Expose server-side switching behavior; TUI invocation needs an explicit bridge.
 - Do not mutate `auth.json` directly.
 - Exhausted accounts may still be manually selected unless product policy later forbids it.
 

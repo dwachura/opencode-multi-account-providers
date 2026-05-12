@@ -41,7 +41,7 @@ Strong provider support requires stable identity extraction. Some controlled env
 ## Implementation Notes
 
 - Make fallback opt-in per provider rather than global broad default.
-- Use token fingerprinting only as a last-resort controlled mode.
+- Use token-derived identity only as a last-resort controlled mode.
 - Preserve safe skip behavior for runtime attribution when fallback confidence is insufficient.
 
 ## Open Questions

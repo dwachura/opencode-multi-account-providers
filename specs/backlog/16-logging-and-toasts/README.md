@@ -14,7 +14,7 @@ Account switching and retry handling are asynchronous. Without concise feedback,
 
 - Emit TUI toasts for user-visible management actions.
 - Emit server logs for runtime detection, attribution, exhaustion, and rotation.
-- Include provider ID and safe account label/fingerprint suffix where useful.
+- Include provider ID and safe account id suffix where useful.
 - Report sync timeouts and unsafe attribution skips.
 - Report all-accounts-exhausted terminal state.
 
@@ -41,7 +41,7 @@ Account switching and retry handling are asynchronous. Without concise feedback,
 ## Implementation Notes
 
 - Never log OAuth tokens or full credential payloads.
-- Prefer labels and short fingerprint suffixes for account references.
+- Prefer account ids or short account id suffixes for account references.
 - Keep logs structured enough for debugging but concise enough for normal use.
 
 ## Open Questions
