@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
-import Database from "better-sqlite3"
+import { Database } from "bun:sqlite"
 import { PLUGIN_ID } from "../shared/constants.js"
 
 const DB_FILENAME = "db.sqlite"
@@ -75,19 +75,19 @@ export function openDb(options: DbOptions = {}): AccountsDb {
     },
     listAccounts(provider) {
       const rows = provider
-        ? db.prepare(`${selectAccountsSql} WHERE provider = ? ORDER BY created_at ASC, id ASC`).all(provider)
-        : db.prepare(`${selectAccountsSql} ORDER BY provider ASC, created_at ASC, id ASC`).all()
+        ? db.query(`${selectAccountsSql} WHERE provider = ? ORDER BY created_at ASC, id ASC`).all(provider)
+        : db.query(`${selectAccountsSql} ORDER BY provider ASC, created_at ASC, id ASC`).all()
 
       return rows.map((row) => mapAccountRow(row as AccountRow))
     },
     upsertAccount(input) {
       const now = new Date().toISOString()
       const existing = db
-        .prepare(`${selectAccountsSql} WHERE provider = ? AND account_id = ?`)
+        .query(`${selectAccountsSql} WHERE provider = ? AND account_id = ?`)
         .get(input.provider, input.accountID) as AccountRow | undefined
 
       if (existing) {
-        db.prepare(
+        db.query(
           `UPDATE accounts
            SET access_token = ?,
                refresh_token = ?,
@@ -104,7 +104,7 @@ export function openDb(options: DbOptions = {}): AccountsDb {
           existing.id,
         )
       } else {
-        db.prepare(
+        db.query(
           `INSERT INTO accounts (
              id,
              provider,
@@ -130,12 +130,12 @@ export function openDb(options: DbOptions = {}): AccountsDb {
       }
 
       const row = db
-        .prepare(`${selectAccountsSql} WHERE provider = ? AND account_id = ?`)
+        .query(`${selectAccountsSql} WHERE provider = ? AND account_id = ?`)
         .get(input.provider, input.accountID) as AccountRow
       return mapAccountRow(row)
     },
     setAccountActive(id, active) {
-      db.prepare("UPDATE accounts SET active = ?, updated_at = ? WHERE id = ?").run(
+      db.query("UPDATE accounts SET active = ?, updated_at = ? WHERE id = ?").run(
         active ? 1 : 0,
         new Date().toISOString(),
         id,
@@ -143,7 +143,7 @@ export function openDb(options: DbOptions = {}): AccountsDb {
     },
     setAccountExhausted(id, exhausted) {
       const now = new Date().toISOString()
-      db.prepare("UPDATE accounts SET exhausted = ?, exhausted_at = ?, updated_at = ? WHERE id = ?").run(
+      db.query("UPDATE accounts SET exhausted = ?, exhausted_at = ?, updated_at = ? WHERE id = ?").run(
         exhausted ? 1 : 0,
         exhausted ? now : null,
         now,
@@ -151,7 +151,7 @@ export function openDb(options: DbOptions = {}): AccountsDb {
       )
     },
     deleteAccount(id) {
-      db.prepare("DELETE FROM accounts WHERE id = ?").run(id)
+      db.query("DELETE FROM accounts WHERE id = ?").run(id)
     },
   }
 
@@ -163,7 +163,7 @@ export function defaultDbPath() {
   return path.join(dataRoot, "opencode", "plugins", PLUGIN_ID, DB_FILENAME)
 }
 
-function initDb(db: Database.Database) {
+function initDb(db: Database) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS accounts (
       id TEXT PRIMARY KEY,

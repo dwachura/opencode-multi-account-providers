@@ -4,7 +4,7 @@ Bare OpenCode plugin foundation for multi-account provider management.
 
 ## Current State
 
-- server plugin initializes global SQLite storage and logs
+- server plugin initializes global SQLite storage through Bun's `bun:sqlite` driver and logs
 - TUI plugin registers `/provider-accounts`
 - `/provider-accounts` opens a placeholder dialog
 - no auth mutation, OAuth flow, provider integration, rate-limit detection, or account rotation yet
@@ -16,7 +16,10 @@ package.json
 bun.lock
 package-lock.json
 tsconfig.json
-scripts/opencode-sandbox.mjs
+e2e-sandbox/opencode-sandbox.mjs
+e2e-sandbox/mock-oauth-server.mjs
+e2e-sandbox/mock-oauth-provider-plugin/
+e2e-sandbox/test/*.test.mjs
 src/server/config.ts
 src/server/db.ts
 src/server/index.ts
@@ -52,6 +55,12 @@ npm remains supported:
 npm install
 npm test
 npm run opencode:sandbox
+```
+
+Sandbox harness tests are separate from the main plugin test suite:
+
+```sh
+npm run test:e2e-sandbox
 ```
 
 Track both lockfiles:
@@ -132,9 +141,11 @@ The database currently contains one table, `accounts`, for signed-in provider ac
 
 Database access currently lives in the server entrypoint only: `src/server/db.ts`. The TUI plugin is a separate OpenCode runtime and does not directly import or call server DB functions.
 
+The storage driver is Bun-only: `src/server/db.ts` imports `bun:sqlite`. Do not use `better-sqlite3` here; OpenCode loads plugins under Bun, and Bun does not support `better-sqlite3` native bindings.
+
 ## Sandbox Smoke Test
 
-Run installed `opencode` from `PATH` against this plugin without touching user OpenCode config, state, cache, data, or provider credentials.
+Run installed `opencode` from `PATH` against this plugin without touching user OpenCode config, state, cache, data, or provider credentials. Sandbox harness code lives under `e2e-sandbox/`.
 
 ```sh
 bun run build

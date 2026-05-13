@@ -44,6 +44,7 @@ OpenCode exposes the current provider auth, not an inventory of multiple stored 
 
 - Inventory should be server-backed; TUI access needs an explicit bridge because TUI and server plugins are separate runtimes.
 - Keep public read model small: provider, account id, active, exhausted, timestamps.
+- Server storage uses `bun:sqlite`; avoid `better-sqlite3` because OpenCode loads plugins under Bun.
 
 ## Open Questions
 

@@ -25,10 +25,10 @@ export async function logPluginEvent(
   message: string,
   extra?: Record<string, unknown>,
 ) {
-  const logger = (client as LogClient | undefined)?.app?.log
-  if (!logger) return
+  const app = (client as LogClient | undefined)?.app
+  if (!app?.log) return
 
-  await logger({
+  await app.log({
     body: {
       service: PLUGIN_ID,
       level,

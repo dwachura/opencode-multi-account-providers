@@ -236,6 +236,7 @@ Chosen model and key decisions:
 - each stored account is a row in the server-side `accounts` table
 - account rows include provider, account id, access/refresh tokens, expiration timestamps, active state, exhausted state, and timestamps
 - SQLite was chosen as the persistent store for this account list
+- server-side SQLite access uses Bun's built-in `bun:sqlite` driver because OpenCode plugin runtime is Bun
 
 Problems addressed and failure modes considered:
 
@@ -246,6 +247,7 @@ Constraints and limitations introduced:
 
 - active and exhausted state are stored directly on each account row
 - multiple accounts can be active/selectable for the same provider
+- server DB code is not Node-portable while it imports `bun:sqlite`
 
 OpenCode SDK/app context:
 

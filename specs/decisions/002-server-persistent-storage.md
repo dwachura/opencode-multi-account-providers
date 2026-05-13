@@ -10,6 +10,8 @@ Server and TUI plugins run as separate OpenCode runtimes. TUI code cannot direct
 
 Use a server-owned SQLite database initialized by the server plugin.
 
+Use Bun's built-in `bun:sqlite` driver for DB access. OpenCode loads plugins under Bun, and `better-sqlite3` is not supported there because its native bindings fail under Bun.
+
 Default path:
 
 ```txt
@@ -22,7 +24,7 @@ On Linux/XDG:
 ${XDG_DATA_HOME:-~/.local/share}/opencode/plugins/opencode-auth-pool/db.sqlite
 ```
 
-Implementation lives in `src/server/db.ts`.
+Implementation lives in `src/server/db.ts` and imports `bun:sqlite` directly. This is intentionally Bun-only for now.
 
 TUI access requires an explicit bridge in a later story; the TUI plugin must not import server DB functions directly.
 
@@ -96,3 +98,5 @@ On update:
 ## Consequences
 
 The current storage layer is intentionally small and easy to refactor. It does not include migrations, encryption, project-scoped storage, direct TUI access, auth mutation, OAuth flow, or account rotation.
+
+Node portability is not a current constraint for the server DB layer. If it becomes one, introduce an adapter instead of reintroducing a static `better-sqlite3` import.

@@ -6,7 +6,7 @@ Priority means implementation order, not product importance.
 
 | Story | Priority | Depends On |
 | --- | --- | --- |
-| [Define Accounts From TUI OAuth](./01-tui-oauth-account-definition/README.md) | P0 | Completed server storage, OAuth APIs, TUI/server bridge |
+| [Mock OAuth Provider And TUI Account Definition](./01-tui-oauth-account-definition/README.md) | P0 | Completed server storage, mock OAuth provider harness, OAuth APIs, TUI/server bridge |
 | [Provider Identity Extraction](./02-provider-identity-extraction/README.md) | P0 | Provider registry shape |
 | [Host Auth Sync](./03-host-auth-sync/README.md) | P0 | Server storage, identity extraction |
 | [Account Deduplication](./04-account-deduplication/README.md) | P0 | Server storage, identity extraction |
@@ -28,7 +28,7 @@ Priority means implementation order, not product importance.
 
 | Milestone | Stories |
 | --- | --- |
-| M1 Account Definition | 01, 02, 03, 04, 05 |
+| M1 Account Definition | 01 part 1, 01 part 2, 02, 03, 04, 05 |
 | M2 Manual MVP | 06, 07, 08, 09, 10, 11 |
 | M3 Runtime Automation | 12, 13, 14, 15, 16 |
 | M4 Extension | 17 |

@@ -13,7 +13,7 @@
     "skipLibCheck": true,
     "jsx": "react-jsx",
     "jsxImportSource": "solid-js",
-    "types": ["node"]
+    "types": ["node", "bun"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

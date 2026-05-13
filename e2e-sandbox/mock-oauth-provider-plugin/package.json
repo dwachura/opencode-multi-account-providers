@@ -1,0 +1,14 @@
+{
+  "name": "auth-pool-mock-oauth-provider-plugin",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./server": {
+      "default": "./index.mjs"
+    }
+  }
+  
+}

@@ -4,7 +4,10 @@ import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { MOCK_PROVIDER_ID, startMockOAuthServer } from "./mock-oauth-server.mjs";
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const PROVIDER_ENV = [
   "ANTHROPIC_API_KEY",
@@ -35,9 +38,43 @@ async function main() {
   const root = await mkdtemp(path.join(os.tmpdir(), "opencode-map-"));
   const paths = sandboxPaths(root);
   const env = sandboxEnv(paths);
+  let mockOAuthServer;
 
   try {
-    await writeSandbox(paths, plugin);
+    const plugins = { server: [plugin], tui: [plugin] };
+    let mockOAuth;
+
+    if (args.mockProvider) {
+      mockOAuthServer = await startMockOAuthServer({
+        accounts: [
+          {
+            accountId: "alice",
+            label: "Alice Mock",
+            access: "mock-access-alice",
+            refresh: "mock-refresh-alice",
+            expires: 4_102_444_800_000,
+          },
+          {
+            accountId: "bob",
+            label: "Bob Mock",
+            access: "mock-access-bob",
+            refresh: "mock-refresh-bob",
+            expires: 4_102_444_800_000,
+          },
+        ],
+      });
+
+      const providerPlugin = pathToFileURL(path.join(REPO_ROOT, "e2e-sandbox/mock-oauth-provider-plugin")).href;
+      plugins.server.push([providerPlugin, { baseURL: mockOAuthServer.url }]);
+      mockOAuth = {
+        providerID: MOCK_PROVIDER_ID,
+        url: mockOAuthServer.url,
+        plugin: providerPlugin,
+        accounts: ["alice", "bob"],
+      };
+    }
+
+    await writeSandbox(paths, plugins);
 
     const summary = {
       sandbox: root,
@@ -46,6 +83,9 @@ async function main() {
       serverConfig: path.join(paths.config, "opencode.jsonc"),
       tuiConfig: path.join(paths.config, "tui.jsonc"),
       plugin,
+      serverPlugins: plugins.server,
+      tuiPlugins: plugins.tui,
+      mockOAuth,
       opencode: args.opencode,
       env: env.overrides,
       scrubbed: env.scrubbed,
@@ -65,6 +105,7 @@ async function main() {
 
     await runOpenCode(executable, paths.project, env.full);
   } finally {
+    if (mockOAuthServer) await mockOAuthServer.close();
     if (!args.keep) await rm(root, { recursive: true, force: true });
   }
 }
@@ -74,6 +115,7 @@ function parseArgs(argv) {
     opencode: "opencode",
     plugin: ".",
     released: false,
+    mockProvider: true,
     keep: false,
     dryRun: false,
     help: false,
@@ -84,6 +126,7 @@ function parseArgs(argv) {
     if (arg === "--help" || arg === "-h") out.help = true;
     else if (arg === "--keep") out.keep = true;
     else if (arg === "--dry-run") out.dryRun = true;
+    else if (arg === "--no-mock-provider") out.mockProvider = false;
     else if (arg === "--released") out.released = true;
     else if (arg === "--plugin") out.plugin = readValue(argv, ++index, arg);
     else if (arg === "--opencode") out.opencode = readValue(argv, ++index, arg);
@@ -119,7 +162,7 @@ function sandboxPaths(root) {
   };
 }
 
-async function writeSandbox(paths, plugin) {
+async function writeSandbox(paths, plugins) {
   await Promise.all([
     mkdir(paths.home, { recursive: true }),
     mkdir(paths.config, { recursive: true }),
@@ -136,7 +179,7 @@ async function writeSandbox(paths, plugin) {
       `${JSON.stringify(
         {
           $schema: "https://opencode.ai/config.json",
-          plugin: [plugin],
+          plugin: plugins.server,
         },
         null,
         2,
@@ -147,7 +190,7 @@ async function writeSandbox(paths, plugin) {
       `${JSON.stringify(
         {
           $schema: "https://opencode.ai/tui.json",
-          plugin: [plugin],
+          plugin: plugins.tui,
         },
         null,
         2,
@@ -237,6 +280,7 @@ Options:
   --plugin <value>            Plugin path, file URL, or package name (if --released is specified), default: .
   --released                  Interpret --plugin as released npm package name
   --opencode <path|command>   OpenCode executable, default: opencode
+  --no-mock-provider          Do not start test mock OAuth provider plugin
   --keep                      Keep sandbox files after exit
   --dry-run                   Write sandbox files and print config without starting OpenCode
 `);
