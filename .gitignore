@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-.npm/
 .bun/
 
 # Build and test output
@@ -11,7 +10,6 @@ coverage/
 
 # Logs
 *.log
-npm-debug.log*
 bun-debug.log*
 yarn-debug.log*
 yarn-error.log*

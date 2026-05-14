@@ -4,20 +4,21 @@ import { COMMAND_PROVIDER_ACCOUNTS } from "./constants.js"
 import { openProviderAccountsDialog } from "./provider-accounts.js"
 
 const tui: TuiPlugin = async (api) => {
-  const dispose = api.command.register(() => [
-    {
-      title: "Provider Accounts",
-      value: COMMAND_PROVIDER_ACCOUNTS,
-      description: "Manage provider accounts",
-      category: "Providers",
-      slash: {
+  const dispose = api.keymap.registerLayer({
+    commands: [
+      {
         name: COMMAND_PROVIDER_ACCOUNTS,
+        namespace: "palette",
+        title: "Provider Accounts",
+        desc: "Manage provider accounts",
+        category: "Providers",
+        slashName: COMMAND_PROVIDER_ACCOUNTS,
+        run() {
+          openProviderAccountsDialog(api)
+        },
       },
-      onSelect() {
-        openProviderAccountsDialog(api)
-      },
-    },
-  ])
+    ],
+  })
 
   api.lifecycle.onDispose(dispose)
 }

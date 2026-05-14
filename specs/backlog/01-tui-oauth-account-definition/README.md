@@ -42,6 +42,7 @@ Real provider OAuth is a poor first e2e target because it requires external acco
 
 ## Part 2 Scope: TUI Account Definition
 
+- Register `/provider-accounts` as a TUI-local keymap palette command.
 - Add a TUI `Add account` flow under `/provider-accounts`.
 - Let the user select an OAuth-capable provider.
 - Trigger server-side account definition through an explicit TUI/server bridge.
@@ -72,6 +73,7 @@ Real provider OAuth is a poor first e2e target because it requires external acco
 
 ## Part 2 Acceptance Criteria
 
+- Given the user invokes `/provider-accounts`, then local TUI UI opens and no model request is sent.
 - Given the user opens `/provider-accounts`, when they choose `Add account`, then they can select a provider.
 - Given provider OAuth succeeds, when account identity is extracted, then the account is stored in `db.sqlite`.
 - Given the same provider account is added again, then the existing row is updated by `(provider, account_id)`.
@@ -89,6 +91,7 @@ Real provider OAuth is a poor first e2e target because it requires external acco
 - Do not mutate `auth.json` directly.
 - Do not expose raw tokens in TUI logs or toasts.
 - Prefer the narrowest bridge needed for account definition and inventory refresh.
+- Use `api.keymap.registerLayer` with palette namespace and `slashName`; do not use legacy `api.command.register`.
 
 ## Open Questions
 

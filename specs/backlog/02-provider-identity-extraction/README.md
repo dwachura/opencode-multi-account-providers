@@ -14,7 +14,7 @@ Provider auth payloads differ and raw token values can change. The plugin needs 
 
 - Define a provider adapter registry keyed by OpenCode provider ID.
 - Define a normalized identity result with stable `id`, display `label`, and optional metadata.
-- Implement strict OpenAI identity extraction using `chatgpt_account_user_id`.
+- Implement strict OpenAI identity extraction using OAuth `accountId` from OpenCode auth.
 - Convert provider identity into a stable `account_id` for storage.
 - Return explicit unsupported/weak identity results when extraction is unsafe.
 
@@ -31,7 +31,7 @@ Provider auth payloads differ and raw token values can change. The plugin needs 
 
 ## Acceptance Criteria
 
-- Given an OpenAI OAuth auth payload with `chatgpt_account_user_id`, when identity extraction runs, then it returns a stable account id.
+- Given an OpenAI OAuth auth payload with `accountId`, when identity extraction runs, then it returns a stable account id.
 - Given the same account has refreshed credentials, when extraction runs again, then it returns the same account id.
 - Given unsupported provider auth, when extraction runs, then it returns a safe unsupported result instead of guessing.
 - Given a provider adapter supplies a label, when the account is listed, then the label is usable for display but not used as behavior identity.
@@ -46,6 +46,6 @@ Provider auth payloads differ and raw token values can change. The plugin needs 
 
 ## Open Questions
 
-- Exact OpenAI auth payload field path in current OpenCode runtime.
+- Whether richer OpenAI display metadata is available beyond OAuth `accountId`.
 - Whether enterprise/account URL metadata is available and should influence display only.
 - Which second provider should be added after OpenAI.

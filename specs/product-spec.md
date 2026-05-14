@@ -891,7 +891,7 @@ Apply provider-aware identity rules so repeated auth observations map to the sam
 
 Chosen model and key decisions:
 
-- OpenAI support uses strict extraction from `chatgpt_account_user_id`
+- OpenAI support uses strict extraction from OAuth `accountId` in OpenCode auth
 - generic token-as-id extraction exists only as a separately enabled fallback path
 - production-grade behavior prefers narrow strictness over broad loose compatibility
 

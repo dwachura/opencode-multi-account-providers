@@ -14,7 +14,6 @@ Bare OpenCode plugin foundation for multi-account provider management.
 ```txt
 package.json
 bun.lock
-package-lock.json
 tsconfig.json
 e2e-sandbox/opencode-sandbox.mjs
 e2e-sandbox/mock-oauth-server.mjs
@@ -28,7 +27,6 @@ src/shared/constants.ts
 src/tui/constants.ts
 src/tui/index.tsx
 src/tui/provider-accounts.tsx
-test/*.test.mjs
 ```
 
 ## Entrypoints
@@ -41,7 +39,7 @@ OpenCode rejects a default export containing both `server()` and `tui()`, so ser
 
 ## Development
 
-Bun is primary for local development:
+Bun is the only supported package manager for this project:
 
 ```sh
 bun install
@@ -49,33 +47,25 @@ bun run test
 bun run opencode:sandbox
 ```
 
-npm remains supported:
-
-```sh
-npm install
-npm test
-npm run opencode:sandbox
-```
-
 Sandbox harness tests are separate from the main plugin test suite:
 
 ```sh
-npm run test:e2e-sandbox
+bun run test:e2e-sandbox
 ```
 
-Track both lockfiles:
+Track `bun.lock` as the only dependency lockfile.
 
-- `bun.lock` is canonical
-- `package-lock.json` is npm compatibility output
-
-Dependency updates use Bun first, then refresh npm compatibility:
+Add dependencies with Bun:
 
 ```sh
 bun add <package>
-npm install --package-lock-only
 ```
 
-Package scripts stay package-manager neutral so both Bun and npm work.
+Update dependencies with Bun:
+
+```sh
+bun update
+```
 
 ## Install
 
@@ -99,7 +89,7 @@ Local package config uses an absolute `file://` URL in both OpenCode config file
 }
 ```
 
-Released package config uses the npm package name in both files.
+Released package config uses the published package name in both files.
 
 ```jsonc
 {
@@ -108,7 +98,7 @@ Released package config uses the npm package name in both files.
 }
 ```
 
-OpenCode installs npm plugins automatically at startup and caches dependencies under its cache directory.
+OpenCode installs registry plugins automatically at startup and caches dependencies under its cache directory.
 
 ## Configuration
 

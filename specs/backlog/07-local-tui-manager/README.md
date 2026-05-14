@@ -12,7 +12,7 @@ Account management is local plugin state and host auth coordination. It should n
 
 ## Scope
 
-- Register a local TUI command named `/provider-accounts`.
+- Register a local TUI palette command exposed as `/provider-accounts`.
 - Display providers and their stored accounts.
 - Show active and exhausted markers.
 - Provide actions for connect, set active, reset exhausted, and disconnect.
@@ -43,6 +43,7 @@ Account management is local plugin state and host auth coordination. It should n
 ## Implementation Notes
 
 - Keep the command TUI-local because server `command.execute.before` is not the right completion boundary.
+- Prefer `api.keymap.registerLayer` with palette namespace and `slashName`; `api.command` is legacy/deprecated in current OpenCode findings.
 - Avoid embedding storage mutations in UI components.
 - Refresh after each mutation through server-backed inventory read once the bridge exists.
 
