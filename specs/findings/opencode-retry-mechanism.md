@@ -21,6 +21,14 @@ During retryable LLM failures, opencode sets session status to `retry`:
       type: "retry",
       attempt: number,
       message: string,
+      action?: {
+        reason: string,
+        provider: string,
+        title: string,
+        message: string,
+        label: string,
+        link?: string
+      },
       next: number
     }
   }
@@ -31,6 +39,7 @@ Fields:
 
 - `attempt`: retry attempt number.
 - `message`: human-readable retry reason.
+- `action`: optional structured retry/action metadata.
 - `next`: Unix timestamp in milliseconds for the next retry.
 
 This is the best signal for reacting while opencode is actively backing off.
@@ -67,9 +76,10 @@ This is useful for final failure handling, logging, or account/provider health t
 
 A plugin should treat these as strong rate-limit signals:
 
+- `session.status` where `status.type === "retry"` and `status.action.reason === "account_rate_limit"`.
 - `session.error` where `error.name === "APIError"` and `error.data.statusCode === 429`.
 - `session.status` retry messages containing `rate limit`, `too many requests`, or related provider text.
-- `session.status` retry messages containing `Provider is overloaded`, which opencode may emit for retryable provider overload conditions.
+- `session.status` retry messages containing `Provider is overloaded`, which opencode may emit for retryable provider overload conditions. Treat this as provider/transient by default, not automatic account exhaustion.
 
 For final API errors, retry timing metadata may be available in headers:
 
@@ -95,6 +105,7 @@ For a plugin that wants to react to rate limits without raw response interceptio
 
 - Listen to `event` hook.
 - Use `session.status` with `status.type === "retry"` for live retry/backoff state.
+- Prefer `status.action.reason === "account_rate_limit"` as the strongest account-limit signal when present.
 - Use `session.error` with `APIError` and `statusCode === 429` for final rate-limit failure state.
 - Prefer `status.next` over re-computing backoff in the plugin.
 - Use `responseHeaders` and `responseBody` only from final `session.error`; they are not present on `session.status` retry events.
@@ -107,11 +118,13 @@ import type { Plugin } from "@opencode-ai/plugin"
 export const RateLimitPlugin: Plugin = async () => ({
   event: async ({ event }) => {
     if (event.type === "session.status" && event.properties.status.type === "retry") {
+      const action = event.properties.status.action
       const message = event.properties.status.message.toLowerCase()
-      if (message.includes("rate") || message.includes("too many requests") || message.includes("overloaded")) {
+      if (action?.reason === "account_rate_limit" || message.includes("rate") || message.includes("too many requests")) {
         console.log("LLM retrying", {
           sessionID: event.properties.sessionID,
           attempt: event.properties.status.attempt,
+          actionReason: action?.reason,
           message: event.properties.status.message,
           retryAt: new Date(event.properties.status.next).toISOString(),
         })
@@ -137,6 +150,7 @@ export const RateLimitPlugin: Plugin = async () => ({
 ## Limitations
 
 - `session.status` retry events do not include raw HTTP status, response headers, or response body.
+- `session.status` retry events can include structured `action`, but that is still not raw provider response data.
 - `session.error` exposes response headers/body only for final API errors.
 - Successful LLM responses are not exposed as raw HTTP responses through plugin events.
 - Full raw response logging still requires wrapping provider `options.fetch` or core changes.

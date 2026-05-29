@@ -44,11 +44,13 @@ OpenCode retry handling and request setup happen in separate phases. The plugin 
 ## Implementation Notes
 
 - Keep rotation two-phase: event marks/flags, request setup applies.
+- Use `chat.params` or `chat.headers` as the pre-request boundary for staged auth mutation.
 - Candidate selection should be deterministic and storage-backed.
 - Clear stale staged rotation after success, terminal failure, or manual override if required.
+- OpenAI OAuth fetch currently re-reads auth near request time, but rotation must not depend on that provider-specific behavior.
 
 ## Open Questions
 
-- Exact hook boundary where auth mutation is safest before next provider request.
+- Whether `chat.params` or `chat.headers` should own staged auth mutation for first implementation.
 - Whether staged rotation should trigger immediately or wait for next model request.
 - How to communicate one wasted retry if provider auth is cached.

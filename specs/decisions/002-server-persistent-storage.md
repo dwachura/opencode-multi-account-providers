@@ -26,7 +26,7 @@ ${XDG_DATA_HOME:-~/.local/share}/opencode/plugins/opencode-auth-pool/db.sqlite
 
 Implementation lives in `src/server/db.ts` and imports `bun:sqlite` directly. This is intentionally Bun-only for now.
 
-TUI access requires an explicit bridge in a later story; the TUI plugin must not import server DB functions directly.
+TUI access goes through the plugin-owned loopback bridge; the TUI plugin must not import server DB functions directly.
 
 ## Schema
 

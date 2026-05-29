@@ -6,9 +6,37 @@ OpenCode source used for references:
 
 - Repository: `https://github.com/anomalyco/opencode`
 - Branch: `dev`
+- Package version: `1.15.13`
+- Git commit: `abaabdcb738652e83526af08a6d805f1d5fd5afc`
+- Worktree state during analysis: clean
+
+Baseline for earlier analysis:
+
+- Package version: `1.15.12`
+- Git commit: `710ed7cb3380b3ff923ff4d91fe505b9d24701de`
 - Package version: `1.14.48`
 - Git commit: `8feb4a31c75e8bd3bd8f84ec860cfd4d326479b4`
-- Worktree state during analysis: clean
+
+## OpenCode 1.15.13 Delta
+
+Latest comparison against `1.15.12` / `710ed7cb3380b3ff923ff4d91fe505b9d24701de` found 74 commits.
+
+Bridge-relevant changes:
+
+- No official TUI-to-server-plugin RPC was added.
+- No plugin API for mounting custom HTTP routes into OpenCode's server was added.
+- Server plugin events now flow through `EventV2Bridge` and are filtered by directory before plugin delivery.
+- Plugin-facing event shape remains `{ id, type, properties }`.
+- Provider OAuth route paths and behavior remain unchanged.
+- Retry status shape and `status.action.reason === "account_rate_limit"` remain unchanged.
+- OpenCode HTTP API now more explicitly separates root, event, PTY, instance, `/doc`, and UI fallback route layers.
+- OpenCode storage/schema ownership moved toward `@opencode-ai/core`; this does not change this plugin's separate SQLite store.
+
+Implications:
+
+- Continue to treat the plugin bridge as plugin-owned infrastructure, not OpenCode-native routing.
+- Continue to use OpenCode SDK routes for OpenCode-owned auth/OAuth behavior.
+- Mirror OpenCode HTTP style for the plugin bridge where practical.
 
 ## Plugin Packaging
 
@@ -40,6 +68,7 @@ Relevant server hook surface:
 - `chat.params(input, output)`
 - `chat.headers(input, output)`
 - `config(input)`
+- `dispose()`
 
 References:
 
@@ -51,23 +80,52 @@ References:
 
 Important behavior:
 
-- Event hooks subscribe to the OpenCode bus and are fire-and-forget.
+- Event hooks subscribe through OpenCode's event bridge and are fire-and-forget.
+- In OpenCode `1.15.13`, server plugin events are backed by `EventV2Bridge`, filtered to the plugin's directory, and delivered as `{ id, type, properties }`.
 - Event hooks cannot mutate the current request or abort runtime flow.
 - Trigger hooks run sequentially and mutate a shared output object.
 - Throwing from a trigger hook can stop pre-request processing, but there is no structured plugin abort API.
+- `dispose` runs when the server plugin scope closes and should release plugin-owned watchers, timers, and long-lived handles.
 
 Implications:
 
 - Use `event` only for observation and staging state.
 - Use `chat.params` or `chat.headers` as the pre-request boundary for request context capture and staged rotation attempts.
 - Do not assume retry events can directly change the in-flight provider call.
+- Register host-auth file watcher cleanup through `dispose` once watcher-based sync is implemented.
+
+## Plugin-Owned Bridge Constraints
+
+OpenCode still does not expose a plugin RPC or route-mounting API suitable for TUI-to-server-plugin calls.
+
+Relevant OpenCode HTTP principles to mirror:
+
+- Bind local server surfaces to `127.0.0.1` by default.
+- Keep routes grouped under a stable root.
+- Use JSON request/response bodies.
+- Use stable, documented route names and paths.
+- Return structured JSON errors with stable names and safe messages.
+- Allow CORS for no origin, localhost/127.0.0.1 origins, and `oc://renderer`.
+- Reuse `OPENCODE_SERVER_PASSWORD` / `OPENCODE_SERVER_USERNAME` semantics when choosing bridge auth behavior.
+
+Implications:
+
+- The plugin bridge root is `/opencode-auth-pool`.
+- The bridge should be loopback-only and use a random/free port discovered by the TUI plugin through plugin-owned metadata.
+- The bridge should not use mDNS or expose remote access in the first implementation.
+- The bridge should accept Basic auth and `auth_token` when `OPENCODE_SERVER_PASSWORD` is set.
+- The bridge should allow local requests when `OPENCODE_SERVER_PASSWORD` is unset or empty, matching OpenCode's own server auth model.
+- The TUI plugin should call the bridge only for plugin-owned account DB/service operations.
+- OpenCode-owned operations still go through OpenCode SDK routes from the server-side service.
 
 ## TUI Plugin Surface
 
 Relevant TUI APIs:
 
 - `api.keymap.registerLayer({ commands, bindings })`
+- `api.mode.current()`, `api.mode.push(mode)`
 - `api.ui.Dialog*`, `api.ui.dialog`, `api.ui.toast`
+- `api.attention.notify(input)`
 - `api.client`
 - `api.state`
 - `api.lifecycle`
@@ -87,6 +145,9 @@ Important behavior:
 - `slashName` exposes a TUI command as slash-like palette/autocomplete command.
 - Local TUI command execution does not need to send a model request.
 - If a user manually submits an unknown slash command as prompt text, it can fall through to model prompting.
+- TUI plugin runtime scopes keymap, route, event, slot, mode, and attention soundboard disposers to the plugin activation lifecycle.
+- `api.lifecycle.onDispose` remains useful for plugin-owned resources not automatically scoped by the runtime.
+- Plugin-owned route/modal bindings should use plugin-scoped modes through `api.mode.push(...)` rather than global always-active bindings.
 
 References:
 
@@ -99,6 +160,8 @@ Implications:
 - Implement `/provider-accounts` as a TUI keymap palette command, not a server slash command.
 - Prefer command palette/autocomplete path for local execution.
 - Use dialogs/selectors/toasts for account management flows.
+- Use `api.mode` for any provider-account route or modal-specific keybindings.
+- Do not manually duplicate cleanup for scoped keymap/route/event registrations; reserve explicit lifecycle cleanup for non-scoped handles.
 
 ## Legacy Auth Storage
 
@@ -193,7 +256,7 @@ Provider OAuth result shape:
 
 - Authorization returns `{ url, method, instructions }`.
 - Callback success persists OAuth credentials when result contains `refresh`.
-- Callback success persists API credentials when result contains `key`.
+- Callback success persists API credentials when result contains `key` and optional `metadata`.
 
 References:
 
@@ -208,6 +271,7 @@ Important behavior:
 - OAuth pending state is keyed only by `providerID`.
 - Starting another OAuth flow for the same provider can overwrite pending state.
 - HTTP callback persists under the requested provider ID; `result.provider` is ignored there.
+- Provider OAuth HTTP errors are structured as `ProviderAuthApiError`, with names such as `ProviderAuthOauthMissing`, `ProviderAuthOauthCodeMissing`, `ProviderAuthOauthCallbackFailed`, and `ProviderAuthValidationFailed`.
 
 References:
 
@@ -221,6 +285,7 @@ Implications:
 - Capture new accounts from host auth reconciliation after OAuth completes.
 - Treat OAuth completion and account activation policy as separate steps.
 - Do not depend on callback response carrying the new auth payload.
+- Surface structured OAuth failure names/messages in TUI flows when available.
 
 ## OpenAI OAuth Identity
 
@@ -228,11 +293,11 @@ OpenCode's OpenAI/Codex OAuth implementation stores `accountId`, not `chatgpt_ac
 
 References:
 
-- `packages/opencode/src/plugin/codex.ts:58`
-- `packages/opencode/src/plugin/codex.ts:77`
-- `packages/opencode/src/plugin/codex.ts:85`
-- `packages/opencode/src/plugin/codex.ts:509`
-- `packages/opencode/src/plugin/codex.ts:585`
+- `packages/opencode/src/plugin/openai/codex.ts:47`
+- `packages/opencode/src/plugin/openai/codex.ts:65`
+- `packages/opencode/src/plugin/openai/codex.ts:73`
+- `packages/opencode/src/plugin/openai/codex.ts:533`
+- `packages/opencode/src/plugin/openai/codex.ts:614`
 
 Identity extraction sources:
 
@@ -242,7 +307,7 @@ Identity extraction sources:
 
 Reference:
 
-- `packages/opencode/src/plugin/codex.ts:77`
+- `packages/opencode/src/plugin/openai/codex.ts:65`
 
 Request-time use:
 
@@ -252,10 +317,10 @@ Request-time use:
 
 References:
 
-- `packages/opencode/src/plugin/codex.ts:424`
-- `packages/opencode/src/plugin/codex.ts:435`
-- `packages/opencode/src/plugin/codex.ts:466`
-- `packages/opencode/src/plugin/codex.ts:468`
+- `packages/opencode/src/plugin/openai/codex.ts:427`
+- `packages/opencode/src/plugin/openai/codex.ts:491`
+- `packages/opencode/src/plugin/openai/codex.ts:451`
+- `packages/opencode/src/plugin/openai/codex.ts:452`
 
 Implications:
 
@@ -271,10 +336,14 @@ OpenCode resolves language model, config, provider info, and current auth before
 References:
 
 - `packages/opencode/src/session/llm.ts:90`
-- `packages/opencode/src/session/llm.ts:161`
-- `packages/opencode/src/session/llm.ts:181`
-- `packages/opencode/src/session/llm.ts:364`
-- `packages/opencode/src/session/llm.ts:373`
+- `packages/opencode/src/session/llm/request.ts:54`
+- `packages/opencode/src/session/llm/request.ts:105`
+- `packages/opencode/src/session/llm/request.ts:125`
+- `packages/opencode/src/session/llm.ts:351`
+
+Implementation note:
+
+- Request preparation was factored into `packages/opencode/src/session/llm/request.ts` after the original analysis, but the plugin hook boundary remains `chat.params` / `chat.headers`.
 
 Provider loading behavior:
 

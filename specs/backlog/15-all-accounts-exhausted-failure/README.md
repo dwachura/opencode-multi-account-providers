@@ -43,8 +43,9 @@ Without terminal handling, the plugin could silently keep retrying exhausted acc
 - Treat terminal exhaustion as product state, not provider auth state.
 - Message should suggest reset exhausted accounts, wait for provider limit window, or connect another account.
 - Avoid clearing active auth just because all accounts are exhausted.
+- A retry event cannot directly abort or rewrite the in-flight provider request through plugin hooks; enforce terminal behavior at the next safe pre-request boundary unless a deliberate session API path is added.
 
 ## Open Questions
 
 - Whether terminal state should be per session only or persisted per provider until account state changes.
-- Whether plugin can actively abort the current request or only report failure state.
+- Whether to add deliberate session-abort integration later, or only report/stage terminal failure state.

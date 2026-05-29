@@ -18,6 +18,8 @@ OpenCode auth APIs mutate live auth asynchronously from plugin-visible storage. 
 - Reconcile observed auth into plugin storage through a single centralized path.
 - Update active account state when observed live auth changes.
 - Handle provider auth disappearance by clearing active live state.
+- Expose reconciliation/wait operations through the server-side account service for bridge callers.
+- Clean up file watchers, timers, and pending handles when the server plugin is disposed.
 
 ## Out Of Scope
 
@@ -38,13 +40,17 @@ OpenCode auth APIs mutate live auth asynchronously from plugin-visible storage. 
 - Given provider auth disappears, when reconciliation runs, then active state is cleared without deleting stored historical accounts by default.
 - Given `auth.json` is temporarily unreadable or partially written, then the watcher retries without corrupting storage.
 - Given an unsupported auth entry appears, then the plugin skips capture and records no unsafe account.
+- Given the OpenCode server plugin scope is disposed, then the auth watcher and retry timers stop.
 
 ## Implementation Notes
 
 - Cache file reads by mtime to avoid unnecessary parsing.
 - Centralize reconciliation so startup scan and watcher events follow identical rules.
 - Expose `waitForActiveAccount(provider, accountID, timeout)` for switching and rotation flows.
+- Bridge flows that mutate auth must call server-side wait/reconciliation APIs instead of reading host auth directly from TUI.
 - Maintain runtime auth timeline from reconciliation events for attribution stories.
+- Register watcher cleanup through the server plugin `dispose` hook.
+- If `OPENCODE_AUTH_CONTENT` is set, file watching may not reflect effective auth and should be treated as unsupported/special embedded mode.
 
 ## Open Questions
 

@@ -12,7 +12,7 @@ Retry events can arrive after auth changed. Current active account is not always
 
 ## Scope
 
-- Capture request context with `sessionID`, `providerID`, and `startedAt` during request setup.
+- Capture request context with `sessionID`, `providerID`, request/message id when available, and `startedAt` during request setup.
 - Maintain in-memory auth timeline intervals per provider from reconciliation events.
 - Resolve the account active at request start by matching `startedAt` against timeline intervals.
 - Join historical account identity to current storage by account id.
@@ -38,14 +38,15 @@ Retry events can arrive after auth changed. Current active account is not always
 - Given the historical account id no longer maps to current storage, then exhaustion is skipped.
 - Given attribution is safe and rate limit is detected, then the responsible account id is returned for exhaustion marking.
 - Given multiple sessions retry concurrently, then attribution remains separated by session/request context.
+- Given multiple requests can overlap in one session, then attribution uses message/request id when available and skips if session-level data is insufficient.
 
 ## Implementation Notes
 
 - Timeline is in-memory process state; storage remains source for current account inventory.
 - Reconciliation should open/close intervals when active auth changes or disappears.
 - Request context should be captured early enough before any staged rotation mutates auth.
+- `chat.params` input includes `sessionID`, provider, and user message data; use the user message id as the request key when possible.
 
 ## Open Questions
 
-- Exact `chat.params` hook payload for provider ID and session ID.
 - How to distinguish multiple requests within one session if OpenCode event granularity is session-level.

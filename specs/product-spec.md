@@ -28,6 +28,7 @@ Current scope:
 
 - OAuth-style provider auth
 - server-side multi-account storage per provider
+- plugin-owned loopback bridge between TUI and server plugin runtimes
 - local TUI account management
 - automatic account rotation after rate limits
 - account identity extraction for supported providers
@@ -52,6 +53,10 @@ OpenCode plugin architecture relevant to this project:
 - `auth.json` is useful as a read-side sync point for host auth state
 - request setup and retry/failure handling happen in different runtime phases
 - provider auth integrations still own final request-time credential use
+- server plugin `dispose` is available for long-lived cleanup
+- TUI plugins have scoped cleanup for registered keymap, route, event, slot, mode, and attention resources
+- OpenCode does not expose official plugin RPC or route mounting for TUI-to-server-plugin calls
+- OpenCode `1.15.13` server plugin events are backed by `EventV2Bridge`, filtered by directory, and still delivered to plugins as `{ id, type, properties }`
 
 Overall OpenCode-driven decisions:
 
@@ -62,10 +67,12 @@ Overall OpenCode-driven decisions:
 5. OpenCode auth mutation and plugin-visible synced state are not the same thing, so flows that change auth wait for synced state instead of treating API completion as final success.
 6. OpenCode/provider auth works differently across providers and does not provide one universal stable account identity for this plugin's use case, so provider-aware account identity extraction is plugin-owned responsibility.
 7. OpenCode state is scoped by directory/workspace and can change outside this plugin, so the plugin uses host auth as the external source of truth and rebuilds local account state from it instead of inventing a fully separate auth model.
+8. OpenCode exposes structured provider OAuth errors and optional retry action metadata, so the plugin should prefer those strong signals before falling back to generic messages.
+9. OpenCode does not expose a TUI-to-server-plugin RPC, so this plugin uses a plugin-owned loopback HTTP bridge for plugin-owned account operations.
 
 Core invariants this plugin must preserve:
 
-- server and TUI behavior stay separate: server handles runtime work and storage, TUI handles local account management through an explicit bridge once implemented
+- server and TUI behavior stay separate: server handles runtime work and storage, TUI handles local account management through the plugin-owned bridge
 - `/provider-accounts` stays local and must not send a model request
 - live auth changes go through OpenCode auth APIs, not direct `auth.json` writes
 - plugin storage is not treated as live auth until host auth sync confirms it
@@ -80,6 +87,40 @@ Core invariants this plugin must preserve:
 - provider support quality depends on stable identity extraction
 - runtime/helper flows must target the same OpenCode directory/workspace state
 - async sync is expected, so flows must handle delay, timeout, and partial sync
+- long-lived server resources must be released through plugin `dispose`
+- TUI resource cleanup should rely on OpenCode-scoped disposers where available, with explicit lifecycle cleanup only for plugin-owned external handles
+- the bridge is plugin-owned infrastructure, not OpenCode-native routing
+- the bridge binds to loopback only and does not use mDNS
+- bridge auth mirrors OpenCode server auth semantics through `OPENCODE_SERVER_PASSWORD` and `OPENCODE_SERVER_USERNAME`
+
+## Plugin Bridge Shape
+
+The plugin bridge is a small HTTP service started by the server plugin and consumed by the TUI plugin.
+
+Chosen model and key decisions:
+
+- the bridge root is `/opencode-auth-pool`
+- the bridge binds to `127.0.0.1`
+- the bridge uses a random/free port and plugin-owned discovery metadata
+- the bridge does not mount into OpenCode's server
+- the bridge does not rely on a non-existent `api.client.pluginClient(...)`
+- the bridge centralizes account DB operations, host-auth sync orchestration, account switching, and OAuth capture coordination on the server side
+- the TUI treats the bridge as the source for plugin-owned account state and never imports server DB code
+
+Security and HTTP style:
+
+- if `OPENCODE_SERVER_PASSWORD` is unset or empty, local bridge requests are allowed without credentials
+- if `OPENCODE_SERVER_PASSWORD` is set, the bridge requires Basic auth or `auth_token=base64(username:password)`
+- `OPENCODE_SERVER_USERNAME` defaults to `opencode`
+- invalid credentials return `401` with `www-authenticate: Basic realm="Secure Area"`
+- bridge CORS allows no origin, localhost/127.0.0.1 origins, and `oc://renderer`
+- bridge errors are JSON with stable names and safe messages
+
+OpenCode SDK/app context:
+
+- OpenCode owns provider auth and OAuth routes, so the server-side bridge service calls OpenCode SDK routes for those operations rather than duplicating provider login.
+- OpenCode does not provide plugin-native TUI/server RPC, so the bridge is a compatibility layer owned by this plugin.
+- Keeping the bridge server-side keeps UI components free of storage, sync, and auth orchestration logic.
 
 ## Major Flows And User Journeys
 
@@ -241,7 +282,7 @@ Chosen model and key decisions:
 Problems addressed and failure modes considered:
 
 - the plugin needs stable multi-account state, not a temporary in-memory list
-- UI actions and runtime rotation need to operate on the same account list through a server-backed bridge
+- UI actions and runtime rotation need to operate on the same account list through the plugin-owned server bridge
 
 Constraints and limitations introduced:
 
@@ -252,7 +293,8 @@ Constraints and limitations introduced:
 OpenCode SDK/app context:
 
 - OpenCode exposes live auth state but not a native inventory of multiple stored accounts for the same provider.
-- Server and TUI plugin sides are separate, so TUI access to server-owned account storage requires an explicit bridge.
+- Server and TUI plugin sides are separate, so TUI access to server-owned account storage goes through the plugin-owned bridge.
+- The bridge is transport; account inventory rules stay in the server-side service.
 
 ### 1.3 Account Deduplication
 
@@ -608,6 +650,7 @@ Chosen model and key decisions:
 - retry handling only marks exhaustion and flags that rotation is needed
 - the actual auth switch happens later during request setup, not directly inside retry event handling
 - after auth switching, the plugin waits for synced state before considering the rotation complete
+- structured retry action metadata is preferred for account-limit classification when present
 
 Problems addressed and failure modes considered:
 
@@ -623,6 +666,7 @@ OpenCode SDK/app context:
 
 - OpenCode lifecycle phases are split: retry/failure is seen in the event stream, while outgoing request behavior is shaped in `chat.params`.
 - Because `auth.set(...)` is a host mutation boundary and request auth may be provider/runtime cached, rotation cannot be assumed to take effect immediately at the moment the retry event is observed.
+- Retry status can include structured `action.reason`, including account-limit signals; message classification remains fallback behavior.
 
 ### 3.5 Terminal All-Accounts-Exhausted Failure Handling
 
@@ -700,6 +744,7 @@ Chosen model and key decisions:
 - change detection is watcher-based rather than purely request-triggered
 - watcher setup includes debounce behavior and retry behavior for startup/watch errors
 - startup scan and live change handling use the same downstream reconciliation model
+- watcher cleanup is registered through the server plugin dispose hook
 
 Problems addressed and failure modes considered:
 
@@ -715,6 +760,7 @@ OpenCode SDK/app context:
 
 - OpenCode auth can change outside this plugin's own UI flows, so request-triggered sync alone is insufficient.
 - In the absence of a first-class auth-change callback tailored to this use case, watcher-based observation becomes the practical host integration strategy.
+- Server plugin `dispose` provides the cleanup boundary for watcher/timer teardown.
 
 ### 4.3 Storage Reconciliation
 
@@ -919,7 +965,7 @@ Chosen model and key decisions:
 
 - this plugin manages which credentials are active, but not the final request-time auth resolution implementation
 - live auth writes go through host auth APIs
-- request-time correctness assumes provider auth integrations re-read live auth when requests happen
+- request-time correctness depends on provider integration/cache behavior, so plugin switches target safe subsequent request boundaries
 
 Problems addressed and failure modes considered:
 
@@ -934,6 +980,7 @@ OpenCode SDK/app context:
 
 - OpenCode/provider integrations remain the layer that actually resolves credentials at request time.
 - This plugin therefore manages which account should be active, but it depends on upstream OpenCode/provider auth behavior to honor that active selection when requests are sent.
+- OpenAI OAuth currently re-reads auth near fetch time, but the plugin must not generalize that behavior to all providers.
 
 ### 5.5 Controlled Fallback Behavior For Less Specialized Providers
 
@@ -981,7 +1028,7 @@ Tie each request to the account that was active when the request began.
 
 Chosen model and key decisions:
 
-- request context tracks `sessionID`, `providerID`, and request `startedAt`
+- request context tracks `sessionID`, `providerID`, request/message id when available, and request `startedAt`
 - request start time is the anchor used for later exhaustion attribution
 
 Problems addressed and failure modes considered:

@@ -13,6 +13,7 @@ Plugin events expose retry and final error information, but not a universal type
 ## Scope
 
 - Listen to server plugin `event` hook.
+- Treat `session.status` retry events with `status.action.reason === "account_rate_limit"` as strong account-limit signals.
 - Treat `session.status` retry events with rate-limit-like messages as live rate-limit signals.
 - Treat `session.error` `APIError` with `statusCode === 429` as final rate-limit failure.
 - Extract retry timing from `status.next` or final error headers when available.
@@ -32,6 +33,7 @@ Plugin events expose retry and final error information, but not a universal type
 ## Acceptance Criteria
 
 - Given a `session.status` retry message mentions rate limit, too many requests, or overloaded, then the plugin emits an internal rate-limit signal.
+- Given a `session.status` retry action has `reason === "account_rate_limit"`, then the plugin emits a strong account-limit signal.
 - Given a `session.error` APIError has `statusCode === 429`, then the plugin emits a final rate-limit signal.
 - Given final error headers contain retry-after values, then the plugin records them as metadata.
 - Given a non-rate-limit API error occurs, then no exhaustion mutation is triggered.
@@ -40,10 +42,12 @@ Plugin events expose retry and final error information, but not a universal type
 ## Implementation Notes
 
 - Use `session.status` for live backoff state and `session.error` for final failure metadata.
+- Prefer structured `status.action.reason` when available before falling back to message classification.
 - Prefer conservative matching over broad generic error matching.
+- Treat provider overload as transient/provider-level unless later provider-specific policy proves account exhaustion.
 - Detection alone should not mark accounts exhausted until attribution can identify the responsible account.
 
 ## Open Questions
 
 - Exact set of provider message substrings for initial classifier.
-- Whether `Provider is overloaded` should always exhaust an account or only mark provider-level transient state.
+- Whether any provider-specific overload message should be promoted from provider-level transient state to account exhaustion.

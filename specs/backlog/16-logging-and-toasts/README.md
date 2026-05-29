@@ -13,6 +13,7 @@ Account switching and retry handling are asynchronous. Without concise feedback,
 ## Scope
 
 - Emit TUI toasts for user-visible management actions.
+- Optionally use TUI attention notifications for high-salience terminal states.
 - Emit server logs for runtime detection, attribution, exhaustion, and rotation.
 - Include provider ID and safe account id suffix where useful.
 - Report sync timeouts and unsafe attribution skips.
@@ -43,8 +44,8 @@ Account switching and retry handling are asynchronous. Without concise feedback,
 - Never log OAuth tokens or full credential payloads.
 - Prefer account ids or short account id suffixes for account references.
 - Keep logs structured enough for debugging but concise enough for normal use.
+- TUI feedback can use `api.ui.toast`; terminal cases may use `api.attention.notify` if not too noisy.
 
 ## Open Questions
 
-- Exact TUI toast API availability from plugin context.
 - Whether server-runtime events can be bridged to TUI notifications live.

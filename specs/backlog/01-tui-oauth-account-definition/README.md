@@ -10,7 +10,7 @@ Part 2: As an OpenCode user, I want to add provider accounts from `/provider-acc
 
 ## Problem
 
-The DB layer can store accounts, but users have no flow to define accounts from the TUI. Because TUI and server plugins are separate runtimes, the feature needs a deliberate bridge between TUI actions, server-side OAuth/auth capture, and server-owned storage.
+The DB layer can store accounts, but users have no flow to define accounts from the TUI. Because TUI and server plugins are separate runtimes, the feature uses the plugin-owned loopback bridge between TUI actions, server-side OAuth/auth capture, and server-owned storage.
 
 Real provider OAuth is a poor first e2e target because it requires external accounts, browser interaction, and real credentials. The first slice should create a deterministic mock OAuth provider and a test-only OpenCode provider plugin, then use that harness to drive the actual account-definition feature.
 
@@ -45,9 +45,10 @@ Real provider OAuth is a poor first e2e target because it requires external acco
 - Register `/provider-accounts` as a TUI-local keymap palette command.
 - Add a TUI `Add account` flow under `/provider-accounts`.
 - Let the user select an OAuth-capable provider.
-- Trigger server-side account definition through an explicit TUI/server bridge.
+- Trigger server-side account definition through the plugin-owned bridge.
 - Use OpenCode provider OAuth APIs to start and complete auth.
 - Capture resulting provider auth on the server side.
+- Surface structured OAuth failures when OpenCode returns provider auth error details.
 - Extract stable `account_id` from auth.
 - Upsert the account into the `accounts` table.
 - Refresh TUI account list after successful capture.
@@ -68,7 +69,7 @@ Real provider OAuth is a poor first e2e target because it requires external acco
 - Completed server persistent storage decision: `specs/decisions/002-server-persistent-storage.md`.
 - Completed mock OAuth provider harness from Part 1.
 - OpenCode provider OAuth APIs.
-- TUI/server bridge design.
+- Plugin-owned loopback bridge skeleton and discovery.
 - Provider identity extraction for at least the first supported provider.
 
 ## Part 2 Acceptance Criteria
@@ -78,6 +79,7 @@ Real provider OAuth is a poor first e2e target because it requires external acco
 - Given provider OAuth succeeds, when account identity is extracted, then the account is stored in `db.sqlite`.
 - Given the same provider account is added again, then the existing row is updated by `(provider, account_id)`.
 - Given OAuth fails, then no account row is inserted.
+- Given OAuth fails with a structured provider auth error, then the TUI shows a specific local error instead of a generic failure when safe.
 - Given identity extraction is unsafe, then no guessed account row is inserted.
 - Given account capture succeeds, then the TUI refreshes and shows the new account without restart.
 - Given e2e/sandbox flow runs, then real user OpenCode config, data, state, cache, and provider credentials are not touched.
@@ -88,14 +90,19 @@ Real provider OAuth is a poor first e2e target because it requires external acco
 - Keep the sandbox script, mock provider, and test OpenCode provider plugin under `e2e-sandbox/`, not normal package exports.
 - Prefer the mock provider as the first e2e target before real provider-specific OAuth work.
 - Keep DB writes server-side through `src/server/db.ts`.
+- Keep account orchestration server-side through `src/server/service.ts`.
 - Do not mutate `auth.json` directly.
 - Do not expose raw tokens in TUI logs or toasts.
-- Prefer the narrowest bridge needed for account definition and inventory refresh.
+- Prefer the narrowest bridge endpoints needed for account definition and inventory refresh.
+- Bridge endpoints live under `/opencode-auth-pool` and are plugin-owned, not OpenCode-native routes.
+- Bridge auth mirrors OpenCode server auth through `OPENCODE_SERVER_PASSWORD` and `OPENCODE_SERVER_USERNAME`.
 - Use `api.keymap.registerLayer` with palette namespace and `slashName`; do not use legacy `api.command.register`.
+- Serialize connect flows per provider because OpenCode OAuth pending state is keyed by provider ID.
+- Treat OAuth callback success as host-auth persistence only; storage capture still comes from auth reconciliation.
+- Use TUI plugin modes for any modal/route-specific keybindings.
+- Rely on runtime-scoped cleanup for keymap registrations; use explicit lifecycle cleanup only for resources not scoped by OpenCode.
 
 ## Open Questions
 
-- Exact OpenCode-supported bridge shape between TUI plugin and server-side plugin behavior.
-- Exact OAuth API call sequence available from plugin context.
 - Exact minimal provider plugin surface needed for the mock OAuth provider.
 - Whether real OpenAI support should be implemented immediately after mock-provider e2e passes or as a separate follow-up.

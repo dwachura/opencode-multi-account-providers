@@ -17,6 +17,9 @@ Account management is local plugin state and host auth coordination. It should n
 - Show active and exhausted markers.
 - Provide actions for connect, set active, reset exhausted, and disconnect.
 - Show success/failure feedback for async operations.
+- Discover and call the plugin-owned loopback bridge for account state and mutations.
+- Show a clear local error when the bridge is unavailable or stale.
+- Use TUI plugin modes for route/modal-specific bindings when the manager grows beyond simple dialogs.
 
 ## Out Of Scope
 
@@ -39,15 +42,19 @@ Account management is local plugin state and host auth coordination. It should n
 - Given no accounts exist, then the TUI shows an empty state and connect action.
 - Given an action completes, then the TUI refreshes through a server-backed bridge rather than stale local assumptions.
 - Given an action fails or times out, then the TUI shows a clear local error.
+- Given bridge discovery fails, then the TUI reports that the server-side plugin bridge is unavailable.
 
 ## Implementation Notes
 
 - Keep the command TUI-local because server `command.execute.before` is not the right completion boundary.
 - Prefer `api.keymap.registerLayer` with palette namespace and `slashName`; `api.command` is legacy/deprecated in current OpenCode findings.
+- Use `api.ui.Dialog*`, `DialogSelect`, `DialogPrompt`, and `api.ui.toast` for local flows.
+- Use `api.mode.push(...)` for manager-owned keybinding modes instead of always-active bindings.
+- OpenCode scopes keymap, route, event, slot, mode, and attention soundboard cleanup to plugin activation; explicit lifecycle cleanup is for non-scoped resources.
 - Avoid embedding storage mutations in UI components.
-- Refresh after each mutation through server-backed inventory read once the bridge exists.
+- Refresh after each mutation through server-backed inventory reads from `/opencode-auth-pool`.
+- The bridge is plugin-owned infrastructure discovered by metadata, not an OpenCode SDK plugin RPC.
 
 ## Open Questions
 
-- Exact OpenCode TUI APIs for dialogs, selectors, and toasts.
 - Whether provider selection appears first or accounts are grouped on one screen.
