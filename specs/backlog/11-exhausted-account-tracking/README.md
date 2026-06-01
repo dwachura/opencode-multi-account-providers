@@ -29,6 +29,17 @@ An account can remain connected but temporarily unsuitable for automatic continu
 - Shared persistent storage.
 - Multi-account inventory.
 
+## Implementation Phase Alignment
+
+Phase 8: Rotation Candidate State
+- Provide the exhaustion state required by manual and automatic rotation candidate selection.
+- Keep exhausted accounts visible in inventory but excluded from automatic rotation.
+- Tests: cover mark exhausted, preserve exhausted state across credential refresh, skip exhausted candidates, cleanup on account removal, and all-exhausted candidate result.
+
+Phase 9 Prerequisite: Retry-Triggered Exhaustion
+- Expose a server-side operation for safely attributed rate-limit handling to mark an account exhausted.
+- Tests: cover idempotent marking and no mutation when attribution is unsafe.
+
 ## Acceptance Criteria
 
 - Given a stored account is marked exhausted, then inventory shows it as exhausted.

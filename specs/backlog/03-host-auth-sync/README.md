@@ -33,6 +33,18 @@ OpenCode auth APIs mutate live auth asynchronously from plugin-visible storage. 
 - Provider identity extraction.
 - Account deduplication path.
 
+## Implementation Phase Alignment
+
+Phase 5: Sync Confirmation For Active Switch
+- Provide the server-side confirmation primitive used by manual account switching.
+- Wait for observed host auth to match the requested provider/account before reporting success.
+- Tests: cover confirmed sync, timeout, mismatch, and unchanged local active state on failure.
+
+Phase 7: Sync Status / Reconciliation
+- Implement startup scan, auth-file watch/retry behavior, and reconciliation into plugin storage.
+- Expose reconciliation and sync-status operations through the account service for local API callers.
+- Tests: cover synced, stale, missing, conflict, unreadable/partial auth input, and watcher cleanup.
+
 ## Acceptance Criteria
 
 - Given OpenCode auth changes outside the plugin, when the watcher observes `auth.json`, then plugin storage reconciles to the new active account.

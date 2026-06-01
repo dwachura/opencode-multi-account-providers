@@ -31,6 +31,18 @@ Account switching and retry handling are asynchronous. Without concise feedback,
 - Manual switch flow.
 - Runtime rate-limit, attribution, and rotation flows.
 
+## Implementation Phase Alignment
+
+Cross-Phase Feedback
+- Add feedback with the owning business phase rather than as unrelated infrastructure.
+- Phase 4: account captured/OAuth failed feedback.
+- Phase 5: active switch success, timeout, mismatch feedback.
+- Phase 6: remove success/failure feedback.
+- Phase 7: sync/reconciliation failure feedback.
+- Phase 8: manual rotation feedback if surfaced in TUI.
+- Phase 9: runtime detection, attribution skip, exhaustion, rotation, and all-exhausted feedback.
+- Tests: each owning phase must assert safe user-visible messages and server logs do not leak tokens.
+
 ## Acceptance Criteria
 
 - Given an account is captured, then the user can see concise confirmation in TUI flow.

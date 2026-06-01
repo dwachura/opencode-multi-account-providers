@@ -34,6 +34,15 @@ OpenCode provider OAuth normally leaves the newly authenticated account as live 
 - Provider OAuth APIs.
 - Plugin-owned bridge account service.
 
+## Implementation Phase Alignment
+
+Phase 4: Connect Extra Account Policy
+- Extend the first account-definition OAuth flow with multi-account policy.
+- Support preserve-current and activate-new modes after a new account is captured.
+- Serialize pending OAuth flows per provider.
+- Avoid overwriting or deleting existing stored accounts.
+- Tests: cover preserve-current restore, activate-new, duplicate account update, structured OAuth errors, unsafe identity rejection, failed restore messaging, and per-provider concurrency rejection.
+
 ## Acceptance Criteria
 
 - Given account A is active, when the user connects account B in preserve mode, then B is captured and A is restored as active after sync.

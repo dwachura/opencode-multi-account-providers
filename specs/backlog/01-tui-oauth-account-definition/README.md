@@ -69,8 +69,27 @@ Real provider OAuth is a poor first e2e target because it requires external acco
 - Completed server persistent storage decision: `specs/decisions/002-server-persistent-storage.md`.
 - Completed mock OAuth provider harness from Part 1.
 - OpenCode provider OAuth APIs.
-- Plugin-owned loopback bridge skeleton and discovery.
 - Provider identity extraction for at least the first supported provider.
+
+## Implementation Phase Alignment
+
+Phase 0: Dependency Baseline
+- Update `@opencode-ai/plugin` to the current analyzed SDK baseline.
+- Resolve compile/type drift before adding account-management behavior.
+- Tests: run existing build/typecheck/test commands; add behavior tests only if the SDK update requires code changes.
+
+Phase 1: Local Bridge/API Setup + Discovery
+- Implement the plugin-owned local API skeleton required for TUI-to-server account management.
+- Use `src/server/auth-pool-api.ts` with internal `AuthPoolServer`; keep routing, auth, CORS, and JSON helpers in that file.
+- Add `/opencode-auth-pool/health`, service discovery metadata, server lifecycle wiring, and the TUI client discovery/health-check path.
+- Add the initial `/provider-accounts` service-status UI so account definition can report bridge availability before OAuth actions exist.
+- Tests: cover health, JSON 404, auth disabled/enabled, Basic auth, `auth_token`, invalid auth, CORS allow/reject cases, discovery metadata, and TUI unavailable states.
+
+Phase 4: First Account Definition
+- Add the initial TUI-driven OAuth account capture flow.
+- Use the plugin-owned local API to call server-side OpenCode provider OAuth APIs.
+- Persist the captured account only after safe identity extraction and host-auth reconciliation.
+- Tests: cover OAuth start/continue handling, failed OAuth non-persistence, unsafe identity rejection, account upsert refresh, and TUI prompt/error states.
 
 ## Part 2 Acceptance Criteria
 

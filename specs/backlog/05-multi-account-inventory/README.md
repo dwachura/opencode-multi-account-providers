@@ -32,6 +32,14 @@ OpenCode exposes the current provider auth, not an inventory of multiple stored 
 - Account deduplication.
 - Provider identity extraction.
 
+## Implementation Phase Alignment
+
+Phase 3: Account Listing
+- Implement the server-side inventory read model and local API response shape.
+- Read plugin storage only from the server runtime; TUI consumes inventory through `/opencode-auth-pool`.
+- Include provider id, account id, label, active state, exhausted state, and sync status needed for compact display.
+- Tests: cover DB-row mapping, empty inventory, grouped multi-account inventory, persistence across restart boundaries where practical, and JSON error handling for read failures.
+
 ## Acceptance Criteria
 
 - Given no accounts are stored, when inventory is requested, then the provider shows an empty manageable state.

@@ -31,6 +31,14 @@ Retry events can arrive after auth changed. Current active account is not always
 - Provider account identity extraction.
 - Multi-account inventory.
 
+## Implementation Phase Alignment
+
+Phase 9B: Safe Retry Attribution
+- Split attribution from detection and rotation.
+- Capture request context at setup and resolve the account active at request start using the auth reconciliation timeline.
+- Return a responsible provider/account only when attribution is provably safe.
+- Tests: cover auth switching after request start, missing timeline skip, deleted account skip, safe attribution result, concurrent session separation, and ambiguous multi-request skip.
+
 ## Acceptance Criteria
 
 - Given request starts under account A and auth later switches to B, when A's retry event arrives, then attribution resolves to A.

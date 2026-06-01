@@ -31,6 +31,13 @@ Removing an inactive account is local storage work, but removing the active or l
 - Host auth sync.
 - OpenCode `auth.remove(...)` access.
 
+## Implementation Phase Alignment
+
+Phase 6: Remove Account
+- First implementation may support inactive-account removal only, with active-account removal explicitly rejected.
+- Full task later adds active-account fallback selection and last-account `auth.remove(...)` behavior.
+- Tests: cover inactive removal, active removal rejection or full fallback behavior if implemented, missing account handling, exhausted-state cleanup, API validation, TUI success/error handling, and refreshed account list.
+
 ## Acceptance Criteria
 
 - Given an inactive account is removed, then the stored account list changes and live active auth remains unchanged.

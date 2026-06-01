@@ -30,6 +30,14 @@ Plugin events expose retry and final error information, but not a universal type
 - Server plugin hooks.
 - Event payload types from OpenCode.
 
+## Implementation Phase Alignment
+
+Phase 9A: Rate-Limit Detection
+- Split detection from attribution and rotation.
+- Listen to server plugin events and emit internal rate-limit signals only.
+- Treat `session.status` retry with `status.action.reason === "account_rate_limit"` as the strongest account-limit signal.
+- Tests: cover strong retry signal, rate-limit-like retry messages, final `429` errors, retry-after metadata, non-rate-limit errors, and ambiguous classification avoiding exhaustion.
+
 ## Acceptance Criteria
 
 - Given a `session.status` retry message mentions rate limit, too many requests, or overloaded, then the plugin emits an internal rate-limit signal.

@@ -30,6 +30,14 @@ Without terminal handling, the plugin could silently keep retrying exhausted acc
 - Exhausted-account tracking.
 - Logging/toast surface for feedback.
 
+## Implementation Phase Alignment
+
+Phase 9D: Terminal No-Candidate Handling
+- Handle the rotation result where no usable account exists for a provider.
+- Stop automatic rotation attempts for the affected provider/session until account state changes.
+- Surface a clear recovery message through logging/toast surfaces.
+- Tests: cover no-candidate result, no retry loop, recovery after reset, recovery after new account connection, and safe server logging context.
+
 ## Acceptance Criteria
 
 - Given all accounts for a provider are exhausted, when rotation scans candidates, then it returns a terminal no-candidate result.

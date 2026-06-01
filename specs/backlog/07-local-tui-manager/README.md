@@ -30,10 +30,27 @@ Account management is local plugin state and host auth coordination. It should n
 ## Dependencies
 
 - Multi-account inventory.
+- TUI/server bridge API from `specs/backlog/01-tui-oauth-account-definition/README.md`.
 - Manual active account switcher.
 - Reset exhausted accounts.
 - Disconnect/remove accounts.
 - Connect extra accounts.
+
+## Implementation Phase Alignment
+
+Phase 2: Provider Listing UI
+- Display providers returned from the local API.
+- Keep provider SDK calls server-side only.
+- Depend on the bridge/API setup implemented by `01`.
+- Tests: cover TUI loading, success, and error provider states plus client response parsing.
+
+Phase 3: Account Listing UI
+- Display stored accounts grouped by provider using the server inventory API.
+- Tests: cover empty, grouped, active/exhausted/sync-status, and error states.
+
+Later Operation Surfaces
+- Add connect, activate, remove, sync, reset, and rotate controls only after their owning backlog phases are implemented and tested server-side.
+- Tests for each UI action belong with the owning business phase and must include refresh/error behavior.
 
 ## Acceptance Criteria
 

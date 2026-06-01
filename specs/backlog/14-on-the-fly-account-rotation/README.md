@@ -33,6 +33,18 @@ OpenCode retry handling and request setup happen in separate phases. The plugin 
 - Manual active account switching service.
 - Host auth sync confirmation.
 
+## Implementation Phase Alignment
+
+Phase 8: Manual Rotation Operation
+- Add a server-side rotation operation that selects the next eligible account for a provider and reuses the active-switch sync path.
+- Add a local API endpoint only if the TUI needs manual rotation control.
+- Tests: cover next-account selection, exhausted/disabled/stale candidate skips, sync success, sync failure preserving active state, API validation, and TUI/client refresh if surfaced.
+
+Phase 9C: Retry-Triggered Rotation Hook
+- Combine detected rate-limit signals and safe attribution to mark exhaustion and stage/apply rotation at a safe boundary.
+- Reuse the manual rotation operation rather than adding a separate switching path.
+- Tests: cover unrelated event ignore, account-rate-limit event handling, attributed account exhaustion, rotation invocation, provider resolution failure, rotation error logging, and no plugin crash.
+
 ## Acceptance Criteria
 
 - Given account A hits a safely attributed rate limit and account B is usable, then A is marked exhausted and rotation to B is staged.

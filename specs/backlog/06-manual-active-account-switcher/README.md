@@ -31,6 +31,15 @@ Stored accounts are only useful if the user can intentionally make one account l
 - Host auth sync confirmation.
 - OpenCode `auth.set(...)` access.
 
+## Implementation Phase Alignment
+
+Phase 5: Active Account Switch
+- Add the server-side activation operation and local API endpoint.
+- Validate the requested account exists and has syncable stored OAuth credentials.
+- Call OpenCode auth APIs server-side and mark active only after host-auth sync confirms the expected account.
+- Add the TUI action as a thin local API caller.
+- Tests: cover missing account rejection, SDK auth call, sync success, sync failure preserving previous active state, API validation, TUI success/error handling, and active marker refresh.
+
 ## Acceptance Criteria
 
 - Given a stored inactive account, when the user sets it active, then `auth.set(...)` is called with that account's credentials.
