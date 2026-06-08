@@ -1,18 +1,21 @@
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
+import type { OpencodeClient } from "@opencode-ai/sdk/v2";
 import { PLUGIN_ID } from "../shared/constants.js";
 import { PluginContext } from "../shared/context.js";
+import { Logger, LogInput } from "../shared/logger.js";
+import { createPluginApiClient } from "./api-client.js";
 import { COMMAND_PROVIDER_ACCOUNTS } from "./constants.js";
 import { openProviderAccountsDialog } from "./provider-accounts.js";
-import { createPluginApiClient } from "./api-client.js";
-import { Logger, LogLevel } from "../shared/logger.js";
 
 const tui: TuiPlugin = async (api, options) => {
   const context = await PluginContext.init({
     ...options,
     ...process.env,
   });
-  LOGGER = Logger.init(api.client.app, "server", context.logLevel);
-  const apiClient = createPluginApiClient(await context.env.getRequired("apiUrl"));
+  LOGGER = Logger.init(logFunc(api.client), "server", context.logLevel);
+  const apiClient = createPluginApiClient(
+    await context.env.getRequired("apiUrl"),
+  );
   const dispose = api.keymap.registerLayer({
     commands: [
       {
@@ -22,9 +25,7 @@ const tui: TuiPlugin = async (api, options) => {
         desc: "Manage provider accounts",
         category: "Providers",
         slashName: COMMAND_PROVIDER_ACCOUNTS,
-        run() {
-          openProviderAccountsDialog(api, apiClient);
-        },
+        run: () => openProviderAccountsDialog(api, apiClient),
       },
     ],
   });
@@ -38,3 +39,9 @@ export default {
 } satisfies TuiPluginModule & { id: string };
 
 export let LOGGER!: Logger;
+
+function logFunc(
+  opencodeClient: OpencodeClient,
+): (input: LogInput) => Promise<unknown> {
+  return (input) => opencodeClient.app.log(input);
+}

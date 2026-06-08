@@ -1,7 +1,8 @@
 import type { Plugin, PluginModule } from "@opencode-ai/plugin";
+import type { OpencodeClient } from "@opencode-ai/sdk";
 import { PLUGIN_ID } from "../shared/constants.js";
 import { PluginContext } from "../shared/context.js";
-import { Logger } from "../shared/logger.js";
+import { Logger, LogInput } from "../shared/logger.js";
 import { PluginApiServer } from "./api-server.js";
 import { openDb } from "./db.js";
 
@@ -10,7 +11,7 @@ const server: Plugin = async ({ client }, options) => {
     ...options,
     ...process.env,
   });
-  LOGGER = Logger.init(client.app, "server", context.logLevel);
+  LOGGER = Logger.init(logFunc(client), "server", context.logLevel);
   const apiServer = await PluginApiServer.start();
   context.env.set("apiUrl", apiServer.url);
   LOGGER.log(`server plugin config loaded: ${JSON.stringify(context)}`);
@@ -30,3 +31,9 @@ export default {
 } satisfies PluginModule & { id: string };
 
 export let LOGGER!: Logger;
+
+function logFunc(
+  opencodeClient: OpencodeClient,
+): (input: LogInput) => Promise<unknown> {
+  return (input) => opencodeClient.app.log({ body: input });
+}

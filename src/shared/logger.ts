@@ -4,52 +4,37 @@ export const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
-type LogInput = {
-  body: {
-    service: typeof PLUGIN_ID;
-    level: LogLevel;
-    message: string;
-    extra?: Record<string, unknown>;
-  };
+export type LogInput = {
+  service: typeof PLUGIN_ID;
+  message: string;
+  level: LogLevel;
+  extra?: Record<string, unknown>;
 };
-
-type LogClient = {
-  log: (input: LogInput) => Promise<unknown>;
-};
-
-async function logPluginEvent(
-  client: LogClient,
-  level: LogLevel,
-  message: string,
-  extra?: Record<string, unknown>,
-) {
-  await client
-    .log({
-      body: {
-        service: PLUGIN_ID,
-        level,
-        message,
-        extra,
-      },
-    })
-    .catch(() => {});
-}
 
 export interface Logger {
   log(
-    message: string,
-    level?: LogLevel,
-    extra?: Record<string, unknown>,
+    message: LogInput["message"],
+    level?: LogInput["level"],
+    extra?: LogInput["extra"],
   ): Promise<unknown>;
 }
 
 export const Logger = {
-  init(client: LogClient, source: string, defaultLevel: LogLevel): Logger {
+  init(
+    logFunc: (input: LogInput) => Promise<unknown>,
+    source: string,
+    defaultLevel: LogLevel,
+  ): Logger {
     return {
       log: async (message, level = defaultLevel, extra = {}) => {
-        await logPluginEvent(client, level, message, {
-          source: source,
-          ...extra,
+        await logFunc({
+          service: PLUGIN_ID,
+          message: message,
+          level: level,
+          extra: {
+            source: source,
+            ...extra,
+          },
         });
       },
     };
