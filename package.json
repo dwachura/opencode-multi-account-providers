@@ -28,12 +28,13 @@
   ],
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
-    "test": "bun run build",
+    "test": "bun run build && bun run test:unit",
+    "test:unit": "bun test ./test",
     "test:e2e-sandbox": "node --test e2e-sandbox/test/*.test.mjs",
     "opencode:sandbox": "node e2e-sandbox/opencode-sandbox.mjs"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.14.50"
+    "@opencode-ai/plugin": "^1.15.13"
   },
   "devDependencies": {
     "@opentui/core": "^0.2.10",
